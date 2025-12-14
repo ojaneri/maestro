@@ -1,0 +1,54 @@
+{
+    "inst_691e0badee487": {
+        "id": "inst_691e0badee487",
+        "name": "Osvaldo",
+        "port": 3010,
+        "api_key": "e3ddd5d04160d1b588bb3098b20d014c",
+        "status": "stopped",
+        "connection_status": "disconnected",
+        "created_at": "2025-11-19 18:25:49",
+        "last_seen": "2025-11-19T21:52:00.000Z",
+        "qr_text": "1@{$instanceId},{$timestamp},1@{$token}",
+        "qr_png": null,
+        "ttl": 300,
+        "openai": {
+            "enabled": false,
+            "api_key": "",
+            "system_prompt": "You are a helpful WhatsApp assistant. Respond naturally and concisely.",
+            "assistant_prompt": ""
+        }
+    },
+    "inst_691e0bb420cbd": {
+        "id": "inst_691e0bb420cbd",
+        "name": "SmartGiga",
+        "port": 3011,
+        "api_key": "0d3748976880df8bc3106f016b624a7a",
+        "status": "stopped",
+        "connection_status": "connecting",
+        "created_at": "2025-11-19 18:25:56",
+        "last_seen": "2025-11-19T22:12:00.000Z",
+        "qr_text": "1@{$instanceId},{$timestamp},1@{$token}",
+        "qr_png": null,
+        "ttl": 300,
+        "openai": {
+            "enabled": false,
+            "api_key": "",
+            "system_prompt": "You are a helpful WhatsApp assistant. Respond naturally and concisely.",
+            "assistant_prompt": ""
+        }
+    },
+    "inst_693ec01e18adb": {
+        "id": "inst_693ec01e18adb",
+        "name": "AtendimentoQura",
+        "port": 3013,
+        "api_key": "110b9db6ec2d9999ebde20a564650c39",
+        "status": "stopped",
+        "created_at": "2025-12-14 13:48:14",
+        "openai": {
+            "enabled": false,
+            "api_key": "",
+            "system_prompt": "You are a helpful WhatsApp assistant. Respond naturally and concisely.",
+            "assistant_prompt": ""
+        }
+    }
+}
