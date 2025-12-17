@@ -138,7 +138,11 @@ function setExternalUserInstances(int $userId, array $instanceIds): void
     }
     $db->exec("BEGIN");
     try {
-        $db->exec("DELETE FROM external_user_instance_access WHERE user_id = $userId");
+        $stmt = $db->prepare("DELETE FROM external_user_instance_access WHERE user_id = :user_id");
+        $stmt->bindValue(':user_id', $userId, SQLITE3_INTEGER);
+        $stmt->execute();
+        $stmt->close();
+
         $stmt = $db->prepare("
             INSERT OR IGNORE INTO external_user_instance_access (user_id, instance_id)
             VALUES (:user_id, :instance_id)
@@ -215,7 +219,7 @@ function createExternalUser(string $name, string $email, string $password, strin
     return getExternalUserById((int)$lastId) ?: [];
 }
 
-function sendExternalAccessNotice(string $email, string $name, string $password, array $instanceNames): void
+function sendExternalAccessNotice(string $email, string $name, array $instanceNames): void
 {
     $baseUrl = rtrim($_ENV['PANEL_BASE_URL'] ?? ($_SERVER['HTTP_HOST'] ?? '/api/envio/wpp'), '/');
     if (strpos($baseUrl, 'http') !== 0) {
@@ -230,11 +234,10 @@ Olá {$name},
 Seu acesso ao painel de conversas foi criado.
 
 Login: {$email}
-Senha temporária: {$password}
 Instâncias autorizadas: {$instanceList}
 Link de login: {$baseUrl}/login.php
 
-Após o primeiro acesso, altere sua senha utilizando a funcionalidade disponível no painel.
+Solicite sua senha ao administrador do sistema.
 
 Atenciosamente,
 Equipe Maestro
@@ -245,4 +248,70 @@ EOT;
     } else {
         error_log("external_auth: e-mail enviado para {$email}");
     }
+}
+
+function updateExternalUserProfile(int $userId, ?string $role = null, ?string $status = null): bool
+{
+    ensureExternalUsersSchema();
+    $db = openExternalAuthDb();
+    if (!$db) {
+        return false;
+    }
+    $fields = [];
+    $params = [];
+    if ($role !== null) {
+        $fields[] = 'role = :role';
+        $params[':role'] = $role === 'manager' ? 'manager' : 'user';
+    }
+    if ($status !== null) {
+        $fields[] = 'status = :status';
+        $params[':status'] = $status === 'inactive' ? 'inactive' : 'active';
+    }
+    if (empty($fields)) {
+        $db->close();
+        return false;
+    }
+
+    $sql = 'UPDATE external_users SET ' . implode(', ', $fields) . ' WHERE id = :id';
+    $stmt = $db->prepare($sql);
+    if (!$stmt) {
+        $db->close();
+        return false;
+    }
+    $stmt->bindValue(':id', $userId, SQLITE3_INTEGER);
+    foreach ($params as $key => $value) {
+        $stmt->bindValue($key, $value, SQLITE3_TEXT);
+    }
+    $result = $stmt->execute();
+    $stmt->close();
+    $changes = ($result !== false) ? $db->changes() : 0;
+    $db->close();
+    return $changes > 0;
+}
+
+function deleteExternalUser(int $userId): bool
+{
+    ensureExternalUsersSchema();
+    $db = openExternalAuthDb();
+    if (!$db) {
+        return false;
+    }
+    $stmtAccess = $db->prepare("DELETE FROM external_user_instance_access WHERE user_id = :id");
+    if ($stmtAccess) {
+        $stmtAccess->bindValue(':id', $userId, SQLITE3_INTEGER);
+        $stmtAccess->execute();
+        $stmtAccess->close();
+    }
+
+    $stmtUser = $db->prepare("DELETE FROM external_users WHERE id = :id");
+    if (!$stmtUser) {
+        $db->close();
+        return false;
+    }
+    $stmtUser->bindValue(':id', $userId, SQLITE3_INTEGER);
+    $result = $stmtUser->execute();
+    $stmtUser->close();
+    $deleted = ($result !== false) ? $db->changes() : 0;
+    $db->close();
+    return $deleted > 0;
 }

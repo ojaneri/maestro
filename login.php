@@ -45,6 +45,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($email === '' || $password === '') {
         $errorMessage = 'Informe e-mail e senha.';
     } elseif ($validEmail !== '' && $email === $validEmail && $password === $validPass) {
+        session_regenerate_id(true);
         $_SESSION['auth'] = true;
         debug_log('login.php: admin login success');
         header('Location: /api/envio/wpp/');
@@ -63,6 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $errorMessage = 'Nenhuma instância atribuída.';
                 debug_log("login.php: user {$email} has no instances");
             } else {
+                session_regenerate_id(true);
                 $_SESSION['external_user'] = [
                     'id' => (int)$user['id'],
                     'name' => $user['name'],
