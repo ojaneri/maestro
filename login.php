@@ -25,11 +25,10 @@ ensureExternalUsersSchema();
 session_start();
 debug_log('login.php: session started');
 
-$validEmail = $_ENV['PANEL_USER_EMAIL'] ?? '';
+$validEmail = strtolower(trim($_ENV['PANEL_USER_EMAIL'] ?? ''));
 $validPass  = $_ENV['PANEL_PASSWORD'] ?? '';
 
-$adminError = null;
-$externalError = null;
+$errorMessage = null;
 
 if (isset($_SESSION['auth']) || isset($_SESSION['external_user'])) {
     $redirectTo = '/api/envio/wpp/';
@@ -41,55 +40,45 @@ if (isset($_SESSION['auth']) || isset($_SESSION['external_user'])) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $loginType = $_POST['login_type'] ?? 'admin';
-    if ($loginType === 'external') {
-        $email = trim(strtolower($_POST['email'] ?? ''));
-        $password = trim($_POST['password'] ?? '');
-        if ($email === '' || $password === '') {
-            $externalError = 'Informe e-mail e senha.';
-            debug_log('login.php: external login missing credentials');
+    $email = strtolower(trim($_POST['email'] ?? ''));
+    $password = $_POST['password'] ?? '';
+    if ($email === '' || $password === '') {
+        $errorMessage = 'Informe e-mail e senha.';
+    } elseif ($validEmail !== '' && $email === $validEmail && $password === $validPass) {
+        $_SESSION['auth'] = true;
+        debug_log('login.php: admin login success');
+        header('Location: /api/envio/wpp/');
+        exit;
+    } else {
+        $user = getExternalUserByEmail($email);
+        if (!$user || !password_verify($password, $user['password_hash'])) {
+            $errorMessage = 'E-mail ou senha inválidos.';
+            debug_log("login.php: external login failed for {$email}");
+        } elseif ($user['status'] !== 'active') {
+            $errorMessage = 'Acesso bloqueado. Contate o administrador.';
+            debug_log("login.php: external login blocked for {$email}");
         } else {
-            $user = getExternalUserByEmail($email);
-            if (!$user || !password_verify($password, $user['password_hash'])) {
-                $externalError = 'E-mail ou senha inválidos.';
-                debug_log("login.php: external login failed for {$email}");
-            } elseif ($user['status'] !== 'active') {
-                $externalError = 'Acesso bloqueado. Contate o administrador.';
-                debug_log("login.php: external login blocked for {$email}");
+            $instances = getExternalUserInstances((int)$user['id']);
+            if (empty($instances)) {
+                $errorMessage = 'Nenhuma instância atribuída.';
+                debug_log("login.php: user {$email} has no instances");
             } else {
-                $instances = getExternalUserInstances((int)$user['id']);
-                if (empty($instances)) {
-                    $externalError = 'Nenhuma instância atribuída.';
-                    debug_log("login.php: user {$email} has no instances");
+                $_SESSION['external_user'] = [
+                    'id' => (int)$user['id'],
+                    'name' => $user['name'],
+                    'email' => $user['email'],
+                    'role' => $user['role'],
+                    'instances' => array_map(fn($instanceId) => ['instance_id' => $instanceId], $instances)
+                ];
+                debug_log("login.php: external login success for {$email} role {$user['role']}");
+                if ($user['role'] === 'manager') {
+                    header("Location: /api/envio/wpp/");
                 } else {
-                    $_SESSION['external_user'] = [
-                        'id' => (int)$user['id'],
-                        'name' => $user['name'],
-                        'email' => $user['email'],
-                        'role' => $user['role'],
-                        'instances' => array_map(fn($instanceId) => ['instance_id' => $instanceId], $instances)
-                    ];
-                    if ($user['role'] === 'manager') {
-                        header("Location: /api/envio/wpp/");
-                    } else {
-                        header("Location: /api/envio/wpp/external_dashboard.php");
-                    }
-                    exit;
+                    header("Location: /api/envio/wpp/external_dashboard.php");
                 }
+                exit;
             }
         }
-    } else {
-        $email = trim($_POST['email'] ?? '');
-        $pass  = trim($_POST['password'] ?? '');
-        debug_log('login.php: admin login attempt with ' . $email);
-        if ($email === $validEmail && $pass === $validPass) {
-            $_SESSION['auth'] = true;
-            debug_log('login.php: admin login success');
-            header('Location: /api/envio/wpp/');
-            exit;
-        }
-        $adminError = 'Login ou senha inválidos.';
-        debug_log('login.php: admin login failed');
     }
 }
 ?>
@@ -125,18 +114,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             border:1px solid var(--border);
             padding: 20px 22px;
             width: 100%;
-            max-width: 860px;
-        }
-        .grid {
-            display:grid;
-            grid-template-columns: repeat(auto-fit, minmax(260px,1fr));
-            gap:20px;
-        }
-        .panel {
-            background:#020617;
-            border-radius:12px;
-            border:1px solid var(--border);
-            padding:16px;
+            max-width: 360px;
         }
         h1 {
             margin:0 0 4px;
@@ -146,13 +124,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             font-size: 12px;
             color: var(--text-muted);
             margin-bottom: 14px;
-        }
-        .panel h2 {
-            margin-top:0;
-            font-size:16px;
-        }
-        .panel .sub {
-            margin-bottom:8px;
         }
         label {
             font-size: 12px;
@@ -201,37 +172,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <body>
 <div class="card">
     <h1>Painel WhatsApp</h1>
-    <div class="sub">Escolha seu tipo de acesso</div>
+    <div class="sub">Use o mesmo formulário para administradores, gerentes ou operadores autorizados.</div>
 
-    <div class="grid">
-        <form class="panel" method="post">
-            <input type="hidden" name="login_type" value="admin">
-            <h2>Administrador</h2>
-            <p class="sub">Credenciais definidas no ambiente</p>
-            <?php if ($adminError): ?>
-                <div class="error"><?php echo htmlspecialchars($adminError); ?></div>
-            <?php endif; ?>
-            <label for="adminEmail">E-mail</label>
-            <input type="email" id="adminEmail" name="email" required value="">
-            <label for="adminPassword">Senha</label>
-            <input type="password" id="adminPassword" name="password" required>
-            <button type="submit">Entrar como administrador</button>
-        </form>
+    <?php if ($errorMessage): ?>
+        <div class="error"><?php echo htmlspecialchars($errorMessage); ?></div>
+    <?php endif; ?>
 
-        <form class="panel" method="post">
-            <input type="hidden" name="login_type" value="external">
-            <h2>Usuário/Gerente</h2>
-            <p class="sub">Acesse apenas as conversas atribuídas</p>
-            <?php if ($externalError): ?>
-                <div class="error"><?php echo htmlspecialchars($externalError); ?></div>
-            <?php endif; ?>
-            <label for="externalEmail">E-mail</label>
-            <input type="email" id="externalEmail" name="email" required>
-            <label for="externalPassword">Senha</label>
-            <input type="password" id="externalPassword" name="password" required>
-            <button type="submit">Entrar como gerente/usuário</button>
-        </form>
-    </div>
+    <form method="post">
+        <label for="email">E-mail</label>
+        <input type="email" id="email" name="email" required autofocus>
+
+        <label for="password">Senha</label>
+        <input type="password" id="password" name="password" required>
+
+        <button type="submit">Entrar</button>
+    </form>
 </div>
 </body>
 </html>

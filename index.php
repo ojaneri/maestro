@@ -409,7 +409,7 @@ $selectedInstanceId = $_GET['instance'] ?? null;
 if ($selectedInstanceId && !isset($sidebarInstances[$selectedInstanceId])) {
     $selectedInstanceId = null;
 }
-$selectedInstanceId = $selectedInstanceId ?? array_key_first($sidebarInstances);
+$selectedInstanceId = $selectedInstanceId ?? (array_key_first($sidebarInstances) ?: null);
 $selectedInstance = $sidebarInstances[$selectedInstanceId] ?? null;
 $selectedPhoneLabel = $selectedInstance ? formatInstancePhoneLabel($selectedInstance['phone'] ?? '') : '';
 
@@ -633,6 +633,44 @@ if (isset($_POST['create'])) {
     debug_log('Redirecting to /api/envio/wpp/ after create');
     header("Location: /api/envio/wpp/");
     exit;
+}
+
+$externalUserMessage = '';
+$externalUserError = '';
+if ($isAdmin && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_external_user'])) {
+    $createName = trim($_POST['external_name'] ?? '');
+    $createEmail = strtolower(trim($_POST['external_email'] ?? ''));
+    $createRole = ($_POST['external_role'] ?? '') === 'manager' ? 'manager' : 'user';
+    $createInstances = array_unique(array_filter((array)($_POST['external_instances'] ?? [])));
+    if ($createName === '' || !filter_var($createEmail, FILTER_VALIDATE_EMAIL)) {
+        $externalUserError = 'Informe nome e e-mail válidos.';
+    } elseif (empty($createInstances)) {
+        $externalUserError = 'Selecione pelo menos uma instância.';
+    } else {
+        try {
+            $password = bin2hex(random_bytes(6));
+            $created = createExternalUser($createName, $createEmail, $password, $createRole, $createInstances);
+            $instanceLabels = [];
+            foreach ($createInstances as $instanceId) {
+                $instanceLabels[] = $instances[$instanceId]['name'] ?? $instanceId;
+            }
+            sendExternalAccessNotice($createEmail, $createName, $password, $instanceLabels);
+            $externalUserMessage = "Acesso {$createEmail} criado e e-mail enviado.";
+        } catch (Exception $err) {
+            $externalUserError = $err->getMessage();
+        }
+    }
+}
+
+$externalUsersList = [];
+if ($isAdmin) {
+    $externalUsersList = listExternalUsers();
+    foreach ($externalUsersList as &$userRow) {
+        $userInstances = getExternalUserInstances((int)$userRow['id']);
+        $userRow['instance_ids'] = $userInstances;
+        $userRow['instance_names'] = array_map(fn($instanceId) => $instances[$instanceId]['name'] ?? $instanceId, $userInstances);
+    }
+    unset($userRow);
 }
 
 // --- Ações ---
@@ -1326,26 +1364,6 @@ Como usar:
         </form>
       </section>
 
-      <!-- COMO CONECTAR -->
-      <aside class="bg-white border border-mid rounded-2xl p-6">
-        <div class="font-medium mb-3">Como conectar</div>
-
-        <div class="space-y-3 text-sm text-slate-600">
-          <div class="p-3 rounded-xl bg-light border border-mid">
-            <strong>GET /health</strong><br>
-            Deve retornar ok true
-          </div>
-          <div class="p-3 rounded-xl bg-light border border-mid">
-            <strong>GET /status</strong><br>
-            Informa se o WhatsApp está conectado
-          </div>
-          <div class="p-3 rounded-xl bg-light border border-mid">
-            <strong>POST /send</strong><br>
-            Envia mensagens
-          </div>
-        </div>
-      </aside>
-
     </div>
 
     <section id="chatHistorySection" class="bg-white border border-mid rounded-2xl p-6 mt-6 hidden">
@@ -1361,6 +1379,90 @@ Como usar:
       <div id="historyStatus" class="text-xs text-slate-500 mt-3">Carregando histórico...</div>
       <div id="historyList" class="mt-4 space-y-3"></div>
     </section>
+
+    <?php if ($isAdmin): ?>
+      <section class="bg-white border border-mid rounded-2xl p-6 mt-6 space-y-6">
+        <div class="flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <h2 class="text-lg font-semibold text-dark">Gerenciar acessos externos</h2>
+            <p class="text-xs text-slate-500">Crie logins para usuários (conversas) ou gerentes (configurações limitadas).</p>
+          </div>
+          <div class="text-[11px] text-slate-500">
+            <?php if ($externalUserMessage): ?>
+              <span class="text-success font-semibold"><?= htmlspecialchars($externalUserMessage) ?></span>
+            <?php elseif ($externalUserError): ?>
+              <span class="text-error font-semibold"><?= htmlspecialchars($externalUserError) ?></span>
+            <?php else: ?>
+              <span>Será enviado um e-mail com a senha temporária.</span>
+            <?php endif; ?>
+          </div>
+        </div>
+
+        <form method="post" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <input type="hidden" name="create_external_user" value="1">
+          <div>
+            <label class="text-[11px] text-slate-500">Nome</label>
+            <input type="text" name="external_name" class="mt-1 w-full rounded-2xl border border-mid px-3 py-2" required>
+          </div>
+          <div>
+            <label class="text-[11px] text-slate-500">E-mail</label>
+            <input type="email" name="external_email" class="mt-1 w-full rounded-2xl border border-mid px-3 py-2" required>
+          </div>
+          <div>
+            <label class="text-[11px] text-slate-500">Perfil</label>
+            <select name="external_role" class="mt-1 w-full rounded-2xl border border-mid px-3 py-2">
+              <option value="user">Usuário (somente conversas)</option>
+              <option value="manager">Gerente (configurações)</option>
+            </select>
+          </div>
+          <div class="md:col-span-3">
+            <label class="text-[11px] text-slate-500">Instâncias autorizadas</label>
+            <div class="mt-1 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              <?php foreach ($instances as $instanceId => $inst): ?>
+                <label class="flex items-center gap-2 text-xs text-slate-600">
+                  <input type="checkbox" name="external_instances[]" value="<?= htmlspecialchars($instanceId) ?>">
+                  <?= htmlspecialchars($inst['name'] ?? $instanceId) ?>
+                </label>
+              <?php endforeach; ?>
+            </div>
+          </div>
+          <div class="md:col-span-3">
+            <button type="submit" class="w-full rounded-2xl bg-primary px-4 py-2 text-white font-semibold hover:opacity-90 transition">
+              Criar acesso e enviar e-mail
+            </button>
+          </div>
+        </form>
+
+        <div class="space-y-3">
+          <h3 class="text-sm font-semibold text-slate-800">Acessos registrados</h3>
+          <?php if (empty($externalUsersList)): ?>
+            <p class="text-xs text-slate-500">Nenhum acesso externo registrado.</p>
+          <?php else: ?>
+            <div class="space-y-2">
+              <?php foreach ($externalUsersList as $userRow): ?>
+                <div class="rounded-2xl border border-mid px-4 py-3 bg-slate-50">
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <div class="text-sm font-semibold text-slate-800"><?= htmlspecialchars($userRow['name'] ?? '') ?></div>
+                      <div class="text-[11px] text-slate-500"><?= htmlspecialchars($userRow['email'] ?? '') ?></div>
+                    </div>
+                    <div class="text-[11px] uppercase <?= $userRow['status'] === 'active' ? 'text-success' : 'text-error' ?>">
+                      <?= htmlspecialchars($userRow['status'] === 'active' ? 'Ativo' : 'Inativo') ?>
+                    </div>
+                  </div>
+                  <div class="mt-2 text-[11px] text-slate-500">
+                    Papel: <?= htmlspecialchars(ucfirst($userRow['role'] ?? '')) ?>
+                  </div>
+                  <div class="mt-1 text-[11px] text-slate-500">
+                    Instâncias: <?= htmlspecialchars(implode(', ', $userRow['instance_names'] ?? [])) ?: 'Sem instâncias' ?>
+                  </div>
+                </div>
+              <?php endforeach; ?>
+            </div>
+          <?php endif; ?>
+        </div>
+      </section>
+    <?php endif; ?>
 
   </main>
 </div>

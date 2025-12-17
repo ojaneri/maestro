@@ -4,7 +4,9 @@
 
 require_once __DIR__ . '/vendor/autoload.php';
 require_once __DIR__ . '/instance_data.php';
+require_once __DIR__ . '/external_auth.php';
 date_default_timezone_set('America/Fortaleza');
+ensureExternalUsersSchema();
 if (file_exists('debug')) {
     function debug_log($message) {
         file_put_contents('debug.log', date('Y-m-d H:i:s') . ' - ' . $message . PHP_EOL, FILE_APPEND | LOCK_EX);
@@ -14,16 +16,24 @@ if (file_exists('debug')) {
 }
 
 session_start();
-if (!isset($_SESSION['auth'])) {
+$externalUser = $_SESSION['external_user'] ?? null;
+$isManagerExternal = $externalUser && ($externalUser['role'] ?? '') === 'manager';
+if (!$externalUser && !isset($_SESSION['auth'])) {
     header("Location: /api/envio/wpp/");
     exit;
 }
 
-// Get instance from URL parameter
 $instanceId = $_GET['instance'] ?? null;
 if (!$instanceId) {
     header("Location: /api/envio/wpp/");
     exit;
+}
+if ($externalUser) {
+    $allowedIds = array_map(fn($entry) => $entry['instance_id'] ?? '', $externalUser['instances'] ?? []);
+    if (!in_array($instanceId, $allowedIds, true)) {
+        header("Location: /api/envio/wpp/external_dashboard.php");
+        exit;
+    }
 }
 
 debug_log('Conversas dashboard loaded for instance: ' . $instanceId);
