@@ -1,4 +1,4 @@
-# Maestro – Orquestrador WhatsApp
+# Maestro – Orquestrador WhatsApp v1.5
 
 <p align="center">
   <img src="docs/images/screen1.png" alt="Maestro Dashboard" width="45%">
@@ -6,35 +6,37 @@
   <img src="docs/images/screen2.png" alt="Maestro Chat" width="45%">
 </p>
 
-Maestro é um sistema de gerenciamento multi-instância para WhatsApp, permitindo orquestrar múltiplas instâncias da API de forma centralizada através de uma interface web moderna e responsiva. O sistema foi atualizado para utilizar um banco de dados **SQLite** como fonte única de verdade, eliminando a necessidade de arquivos `instances.json`.
+Maestro é um sistema de gerenciamento multi-instância para WhatsApp, permitindo orquestrar múltiplas instâncias da API de forma centralizada. A versão 1.5 introduz gerenciamento de múltiplos usuários (Gerente/Operador), permitindo controle de acesso granular às instâncias.
+
+O sistema foi atualizado para utilizar um banco de dados **SQLite** como fonte única de verdade, eliminando a necessidade de arquivos `instances.json`.
 
 ---
 
-# Maestro – WhatsApp Orchestrator
+# Maestro – WhatsApp Orchestrator v1.5
 
-Maestro is a multi-instance WhatsApp management system that allows you to orchestrate multiple API instances centrally through a modern, responsive web interface. The system has been updated to use a **SQLite** database as the single source of truth, eliminating the need for `instances.json` files.
+Maestro is a multi-instance WhatsApp management system that allows you to orchestrate multiple API instances centrally. Version 1.5 introduces multi-user management (Manager/Operator), enabling granular access control to instances.
+
+The system now uses a **SQLite** database as the single source of truth, eliminating the need for `instances.json` files.
 
 ---
 
 ## Funcionalidades (PT)
 
+- **Gerenciamento Multi-Usuário**: Crie usuários com perfis de **Gerente** (acesso total às instâncias designadas) ou **Operador** (acesso apenas ao chat).
+- **Controle de Acesso**: Designe quais instâncias cada usuário pode acessar.
 - **Gerenciamento Multi-Instância**: Crie e gerencie múltiplas instâncias do WhatsApp a partir de um banco de dados central.
 - **Autenticação por QR Code**: Gere e exiba códigos QR para autenticação.
-- **Envio de Mensagens**: Envie mensagens de texto para qualquer número do WhatsApp.
-- **Monitoramento de Status em Tempo Real**: Verifique o status de conexão de cada instância.
-- **Automação com IA**: Respostas automáticas com IA (OpenAI e Gemini), com histórico de conversas persistente.
+- **Automação com IA**: Respostas automáticas com IA (OpenAI e Gemini).
 - **Dashboard de Chat**: Interface no estilo WhatsApp para visualização e resposta a conversas.
-- **Armazenamento Unificado**: Todas as configurações, mensagens e metadados são armazenados em um banco de dados SQLite.
 
 ## Features (EN)
 
+- **Multi-User Management**: Create users with **Manager** (full access to designated instances) or **Operator** (chat-only access) profiles.
+- **Access Control**: Assign which instances each user can access.
 - **Multi-Instance Management**: Create and manage multiple WhatsApp instances from a central database.
 - **QR Code Authentication**: Generate and display QR codes for authentication.
-- **Message Sending**: Send text messages to any WhatsApp number.
-- **Real-time Status Monitoring**: Check the connection status of each instance.
-- **AI-Powered Automation**: Automatic AI-powered responses (OpenAI and Gemini) with persistent conversation history.
+- **AI-Powered Automation**: Automatic AI-powered responses (OpenAI and Gemini).
 - **Chat Dashboard**: WhatsApp-style interface for viewing and responding to conversations.
-- **Unified Storage**: All configurations, messages, and metadata are stored in a single SQLite database.
 
 ---
 
@@ -71,7 +73,7 @@ Maestro is a multi-instance WhatsApp management system that allows you to orches
     ```
 
 3.  **Configure as variáveis de ambiente:**
-    Crie um arquivo `.env` e defina as credenciais de login.
+    Crie um arquivo `.env` para o usuário **Admin** principal.
     ```env
     PANEL_PASSWORD=sua-senha-segura
     ```
@@ -80,7 +82,7 @@ Maestro is a multi-instance WhatsApp management system that allows you to orches
     ```bash
     php -S localhost:8080 index.php
     ```
-    O banco de dados `chat_data.db` e as tabelas serão criados automaticamente no primeiro acesso.
+    O banco de dados `chat_data.db` será criado automaticamente.
 
 ## Installation (EN)
 
@@ -97,7 +99,7 @@ Maestro is a multi-instance WhatsApp management system that allows you to orches
     ```
 
 3.  **Configure environment variables:**
-    Create a `.env` file and set your login credentials.
+    Create a `.env` file for the main **Admin** user.
     ```env
     PANEL_PASSWORD=your-secure-password
     ```
@@ -106,13 +108,31 @@ Maestro is a multi-instance WhatsApp management system that allows you to orches
     ```bash
     php -S localhost:8080 index.php
     ```
-    The `chat_data.db` database and its tables will be created automatically on the first run.
+    The `chat_data.db` database will be created automatically.
+
+---
+
+## Gerenciamento de Usuários (PT)
+
+- **Admin**: O usuário principal, configurado via `.env`, tem acesso a todas as funcionalidades, incluindo a criação de outros usuários.
+- **Gerente (Manager)**: Pode gerenciar e configurar as instâncias que lhe foram atribuídas.
+- **Operador (User)**: Pode apenas visualizar e responder a conversas nas instâncias que lhe foram atribuídas.
+
+O Admin pode criar novos usuários na interface principal do painel.
+
+## User Management (EN)
+
+- **Admin**: The main user, configured via `.env`, has access to all features, including creating other users.
+- **Manager**: Can manage and configure the instances assigned to them.
+- **Operator (User)**: Can only view and respond to conversations in the instances assigned to them.
+
+The Admin can create new users in the main dashboard interface.
 
 ---
 
 ## Esquema do Banco de Dados (SQL)
 
-O sistema utiliza um banco de dados SQLite (`chat_data.db`) para armazenar todas as informações. As tabelas são criadas automaticamente, mas você pode usar o esquema abaixo como referência.
+O sistema utiliza um banco de dados SQLite (`chat_data.db`) para armazenar todas as informações.
 
 ```sql
 CREATE TABLE IF NOT EXISTS settings (
@@ -133,6 +153,23 @@ CREATE TABLE IF NOT EXISTS instances (
     phone TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS external_users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('user','manager')) DEFAULT 'user',
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS external_user_instance_access (
+    user_id INTEGER NOT NULL,
+    instance_id TEXT NOT NULL,
+    FOREIGN KEY(user_id) REFERENCES external_users(id) ON DELETE CASCADE,
+    UNIQUE(user_id, instance_id)
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -209,16 +246,15 @@ CREATE TABLE IF NOT EXISTS event_logs (
 
 ## Estrutura do Projeto (PT)
 
-A estrutura foi simplificada para refletir a centralização dos dados no banco de dados.
-
 ```
 maestro/
-├── index.php                 # Arquivo principal da aplicação (painel)
-├── api.php                   # Endpoints da API para mensagens e integrações
-├── gemini.php                # Lógica para integração com Gemini
+├── index.php                 # Painel principal do Admin
+├── api.php                   # Endpoints da API
+├── external_auth.php         # Lógica de autenticação para múltiplos usuários
+├── external_dashboard.php    # Painel para usuários externos (Gerente/Operador)
 ├── dashboard_chat.php        # Interface do dashboard de chat
-├── db-updated.js             # Módulo de gerenciamento do banco de dados SQLite
-├── whatsapp-server-intelligent.js # Servidor Node.js que gerencia as instâncias Baileys
+├── db-updated.js             # Módulo de gerenciamento do banco de dados
+├── whatsapp-server-intelligent.js # Servidor Node.js para as instâncias Baileys
 ├── composer.json             # Dependências do PHP
 ├── package.json              # Dependências do Node.js
 ├── .env                      # Arquivo para variáveis de ambiente (NÃO versionar)
@@ -228,16 +264,15 @@ maestro/
 
 ## Project Structure (EN)
 
-The structure has been simplified to reflect the centralization of data in the database.
-
 ```
 maestro/
-├── index.php                 # Main application file (dashboard)
-├── api.php                   # API endpoints for messages and integrations
-├── gemini.php                # Logic for Gemini integration
+├── index.php                 # Main Admin dashboard
+├── api.php                   # API endpoints
+├── external_auth.php         # Authentication logic for multi-users
+├── external_dashboard.php    # Dashboard for external users (Manager/Operator)
 ├── dashboard_chat.php        # Chat dashboard interface
-├── db-updated.js             # SQLite database management module
-├── whatsapp-server-intelligent.js # Node.js server that manages Baileys instances
+├── db-updated.js             # Database management module
+├── whatsapp-server-intelligent.js # Node.js server for Baileys instances
 ├── composer.json             # PHP dependencies
 ├── package.json              # Node.js dependencies
 ├── .env                      # File for environment variables (DO NOT commit)
