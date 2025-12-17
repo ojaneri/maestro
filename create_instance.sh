@@ -6,9 +6,8 @@ BASE="/var/www/html/janeri.com.br/api/envio/wpp"
 
 echo "[CREATE] Criando instância $ID na porta $PORT"
 
-pm2 start $BASE/whatsapp-server.js --name "wpp_$ID" -- \
+pm2 start $BASE/whatsapp-server-intelligent.js --name "wpp_$ID" -- \
     --id="$ID" \
     --port="$PORT"
 
 echo "[CREATE] Instância $ID criada."
-

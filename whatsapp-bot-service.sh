@@ -6,8 +6,7 @@
 # - INSTALAÇÃO do serviço systemd: rodar como root
 
 BASEDIR="$(cd "$(dirname "$0")" && pwd)"
-INSTANCES_FILE="$BASEDIR/instances.json"
-NODE_SERVER="$BASEDIR/whatsapp-server.js"
+NODE_SERVER="$BASEDIR/whatsapp-server-intelligent.js"
 SERVICE_NAME="whatsapp-bot-orchestrator"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 
@@ -48,18 +47,20 @@ check_dependencies() {
     if [ -z "$PM2_BIN" ]; then
         echo "[WARN] pm2 não encontrado para usuário $(whoami)"
     fi
-    [ -f "$NODE_SERVER" ]    || echo "[WARN] whatsapp-server.js não encontrado em $NODE_SERVER"
-    [ -f "$INSTANCES_FILE" ] || echo "[WARN] instances.json não encontrado em $INSTANCES_FILE"
+    [ -f "$NODE_SERVER" ]    || echo "[WARN] whatsapp-server-intelligent.js não encontrado em $NODE_SERVER"
 }
 
 list_instances() {
-    [ -f "$INSTANCES_FILE" ] || return 0
     php -r '
-        $file = "'$INSTANCES_FILE'";
-        if (!file_exists($file)) exit(0);
-        $instances = json_decode(file_get_contents($file), true) ?: [];
+        $base = "'"$BASEDIR"'";
+        require $base . "/vendor/autoload.php";
+        require $base . "/instance_data.php";
+        $instances = loadInstancesFromDatabase();
         foreach ($instances as $id => $inst) {
-            echo $id."|".($inst["name"] ?? $id)."|".($inst["port"] ?? 0)."|".($inst["status"] ?? "unknown").PHP_EOL;
+            $name = $inst["name"] ?? $id;
+            $port = $inst["port"] ?? 0;
+            $status = $inst["connection_status"] ?? ($inst["status"] ?? "unknown");
+            echo $id."|".$name."|".$port."|".$status.PHP_EOL;
         }
     '
 }
@@ -108,11 +109,11 @@ stop_instance() {
 }
 
 show_status() {
-    echo "ID           | Nome                | Porta | JSON | PM2"
-    echo "-------------+---------------------+-------+------+--------"
+    echo "ID           | Nome                | Porta | Status | PM2"
+    echo "-------------+---------------------+-------+--------+--------"
     while IFS='|' read -r id name port jstatus; do
         [ -z "$id" ] && continue
-        printf "%-11s | %-19s | %-5s | %-4s | %-8s\n" \
+        printf "%-11s | %-19s | %-5s | %-6s | %-8s\n" \
             "$id" "$name" "$port" "$jstatus" "$(pm2_status "$id")"
     done < <(list_instances)
 }
@@ -128,6 +129,45 @@ heal_instances() {
             echo "[OK] $id ($name) já está ONLINE"
         fi
     done < <(list_instances)
+    cleanup_removed_instances
+}
+
+cleanup_removed_instances() {
+    if [ -z "$PM2_BIN" ]; then
+        return
+    fi
+
+    mapfile -t desired_ids < <(list_instances | cut -d'|' -f1)
+    export DESIRED_IDS="$(printf "%s\n" "${desired_ids[@]}")"
+
+    python3 - "$PM2_BIN" <<'PY'
+import json
+import os
+import subprocess
+import sys
+
+pm2_bin = sys.argv[1]
+desired = set(filter(None, os.environ.get('DESIRED_IDS', '').split()))
+
+try:
+    raw = subprocess.check_output([pm2_bin, 'jlist'], stderr=subprocess.DEVNULL)
+except (subprocess.CalledProcessError, FileNotFoundError):
+    sys.exit(0)
+
+try:
+    processes = json.loads(raw)
+except json.JSONDecodeError:
+    sys.exit(0)
+
+    for proc in processes:
+        name = proc.get('name', '')
+        if not name.startswith('wpp_'):
+            continue
+        instance_id = name.split('wpp_', 1)[1]
+        if instance_id and instance_id not in desired:
+            print(f"[HEAL] {instance_id} removida do registro → encerrando {name}")
+            subprocess.run([pm2_bin, 'delete', name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+PY
 }
 
 install_service() {

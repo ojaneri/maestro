@@ -12,10 +12,15 @@ logs/
 
 # Node / geral
 node_modules/
+.npm-cache/
 npm-debug.log*
 yarn-error.log*
+
+# Database files
+*.db
+chat_data.db
 
 # Sistema
 .DS_Store
 Thumbs.db
-
+debug.log
