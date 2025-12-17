@@ -637,27 +637,54 @@ if (isset($_POST['create'])) {
 
 $externalUserMessage = '';
 $externalUserError = '';
-if ($isAdmin && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_external_user'])) {
-    $createName = trim($_POST['external_name'] ?? '');
-    $createEmail = strtolower(trim($_POST['external_email'] ?? ''));
-    $createRole = ($_POST['external_role'] ?? '') === 'manager' ? 'manager' : 'user';
-    $createInstances = array_unique(array_filter((array)($_POST['external_instances'] ?? [])));
-    if ($createName === '' || !filter_var($createEmail, FILTER_VALIDATE_EMAIL)) {
-        $externalUserError = 'Informe nome e e-mail válidos.';
-    } elseif (empty($createInstances)) {
-        $externalUserError = 'Selecione pelo menos uma instância.';
-    } else {
-        try {
-            $password = bin2hex(random_bytes(6));
-            $created = createExternalUser($createName, $createEmail, $password, $createRole, $createInstances);
-            $instanceLabels = [];
-            foreach ($createInstances as $instanceId) {
-                $instanceLabels[] = $instances[$instanceId]['name'] ?? $instanceId;
+if ($isAdmin && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (isset($_POST['delete_external_user'])) {
+        $deleteId = (int)($_POST['delete_user_id'] ?? 0);
+        if ($deleteId && deleteExternalUser($deleteId)) {
+            $externalUserMessage = 'Acesso removido com sucesso.';
+        } else {
+            $externalUserError = 'Falha ao remover o acesso.';
+        }
+    } elseif (isset($_POST['update_external_user'])) {
+        $updateId = (int)($_POST['update_user_id'] ?? 0);
+        $updateRole = ($_POST['update_role'] ?? '') === 'manager' ? 'manager' : 'user';
+        $updateStatus = ($_POST['update_status'] ?? '') === 'inactive' ? 'inactive' : 'active';
+        $updateInstances = array_unique(array_filter((array)($_POST['update_instances'] ?? [])));
+        if (!$updateId) {
+            $externalUserError = 'Usuário inválido.';
+        } elseif (empty($updateInstances)) {
+            $externalUserError = 'Selecione pelo menos uma instância.';
+        } else {
+            $updated = updateExternalUserProfile($updateId, $updateRole, $updateStatus);
+            if ($updated) {
+                setExternalUserInstances($updateId, $updateInstances);
+                $externalUserMessage = 'Acesso atualizado com sucesso.';
+            } else {
+                $externalUserError = 'Não houve alterações ou o usuário não foi encontrado.';
             }
-            sendExternalAccessNotice($createEmail, $createName, $password, $instanceLabels);
-            $externalUserMessage = "Acesso {$createEmail} criado e e-mail enviado.";
-        } catch (Exception $err) {
-            $externalUserError = $err->getMessage();
+        }
+    } elseif (isset($_POST['create_external_user'])) {
+        $createName = trim($_POST['external_name'] ?? '');
+        $createEmail = strtolower(trim($_POST['external_email'] ?? ''));
+        $createRole = ($_POST['external_role'] ?? '') === 'manager' ? 'manager' : 'user';
+        $createInstances = array_unique(array_filter((array)($_POST['external_instances'] ?? [])));
+        if ($createName === '' || !filter_var($createEmail, FILTER_VALIDATE_EMAIL)) {
+            $externalUserError = 'Informe nome e e-mail válidos.';
+        } elseif (empty($createInstances)) {
+            $externalUserError = 'Selecione pelo menos uma instância.';
+        } else {
+            try {
+                $password = bin2hex(random_bytes(6));
+                $created = createExternalUser($createName, $createEmail, $password, $createRole, $createInstances);
+                $instanceLabels = [];
+                foreach ($createInstances as $instanceId) {
+                    $instanceLabels[] = $instances[$instanceId]['name'] ?? $instanceId;
+                }
+                sendExternalAccessNotice($createEmail, $createName, $instanceLabels);
+                $externalUserMessage = "Acesso {$createEmail} criado e e-mail enviado.";
+            } catch (Exception $err) {
+                $externalUserError = $err->getMessage();
+            }
         }
     }
 }
@@ -1439,25 +1466,65 @@ Como usar:
             <p class="text-xs text-slate-500">Nenhum acesso externo registrado.</p>
           <?php else: ?>
             <div class="space-y-2">
-              <?php foreach ($externalUsersList as $userRow): ?>
-                <div class="rounded-2xl border border-mid px-4 py-3 bg-slate-50">
-                  <div class="flex items-center justify-between">
-                    <div>
-                      <div class="text-sm font-semibold text-slate-800"><?= htmlspecialchars($userRow['name'] ?? '') ?></div>
-                      <div class="text-[11px] text-slate-500"><?= htmlspecialchars($userRow['email'] ?? '') ?></div>
-                    </div>
-                    <div class="text-[11px] uppercase <?= $userRow['status'] === 'active' ? 'text-success' : 'text-error' ?>">
-                      <?= htmlspecialchars($userRow['status'] === 'active' ? 'Ativo' : 'Inativo') ?>
-                    </div>
+          <?php foreach ($externalUsersList as $userRow): ?>
+            <?php
+              $userInstances = $userRow['instance_ids'] ?? [];
+              $userRole = $userRow['role'] ?? 'user';
+              $userStatus = $userRow['status'] ?? 'active';
+              $userId = (int)($userRow['id'] ?? 0);
+            ?>
+              <div class="rounded-2xl border border-mid px-4 py-3 bg-slate-50 space-y-3">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <div class="text-sm font-semibold text-slate-800"><?= htmlspecialchars($userRow['name'] ?? '') ?></div>
+                    <div class="text-[11px] text-slate-500"><?= htmlspecialchars($userRow['email'] ?? '') ?></div>
                   </div>
-                  <div class="mt-2 text-[11px] text-slate-500">
-                    Papel: <?= htmlspecialchars(ucfirst($userRow['role'] ?? '')) ?>
-                  </div>
-                  <div class="mt-1 text-[11px] text-slate-500">
-                    Instâncias: <?= htmlspecialchars(implode(', ', $userRow['instance_names'] ?? [])) ?: 'Sem instâncias' ?>
+                  <div class="text-[11px] uppercase <?= $userStatus === 'active' ? 'text-success' : 'text-error' ?>">
+                    <?= htmlspecialchars($userStatus === 'active' ? 'Ativo' : 'Inativo') ?>
                   </div>
                 </div>
-              <?php endforeach; ?>
+                <div class="text-[11px] text-slate-500">
+                  Papel atual: <?= htmlspecialchars(ucfirst($userRole)) ?>
+                </div>
+                <form method="post" class="space-y-3">
+                  <input type="hidden" name="update_external_user" value="1">
+                  <input type="hidden" name="update_user_id" value="<?= $userId ?>">
+                  <div class="flex flex-wrap gap-3 text-[11px]">
+                    <label class="flex items-center gap-2">
+                      <span>Perfil</span>
+                      <select name="update_role" class="rounded-2xl border border-mid px-2 py-1 bg-white text-xs">
+                        <option value="user" <?= $userRole === 'user' ? 'selected' : '' ?>>Usuário</option>
+                        <option value="manager" <?= $userRole === 'manager' ? 'selected' : '' ?>>Gerente</option>
+                      </select>
+                    </label>
+                    <label class="flex items-center gap-2">
+                      <span>Status</span>
+                      <select name="update_status" class="rounded-2xl border border-mid px-2 py-1 bg-white text-xs">
+                        <option value="active" <?= $userStatus === 'active' ? 'selected' : '' ?>>Ativo</option>
+                        <option value="inactive" <?= $userStatus === 'inactive' ? 'selected' : '' ?>>Inativo</option>
+                      </select>
+                    </label>
+                  </div>
+                  <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 text-[11px]">
+                    <?php foreach ($instances as $instanceId => $inst): ?>
+                      <label class="flex items-center gap-2 text-slate-600">
+                        <input type="checkbox" name="update_instances[]" value="<?= htmlspecialchars($instanceId) ?>"
+                               <?= in_array($instanceId, $userInstances, true) ? 'checked' : '' ?>>
+                        <?= htmlspecialchars($inst['name'] ?? $instanceId) ?>
+                      </label>
+                    <?php endforeach; ?>
+                  </div>
+                  <div class="flex gap-2">
+                    <button type="submit" class="rounded-2xl bg-primary px-3 py-1 text-xs text-white">Salvar</button>
+                    <button type="submit" name="delete_external_user" value="1"
+                        class="rounded-2xl border border-error px-3 py-1 text-xs text-error hover:bg-error/10">
+                      Excluir acesso
+                    </button>
+                    <input type="hidden" name="delete_user_id" value="<?= $userId ?>">
+                  </div>
+                </form>
+              </div>
+          <?php endforeach; ?>
             </div>
           <?php endif; ?>
         </div>
