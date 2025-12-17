@@ -318,15 +318,15 @@ if (!function_exists('renderSidebarContent')) {
     {
     ?>
     <div class="p-6 border-b border-mid">
-      <div class="flex items-center gap-3">
-        <div class="flex items-center justify-center h-10">
-          <img src="assets/maestro-logo.png" width="48" style="height:auto;" alt="Logomarca Maestro">
+      <a href="/api/envio/wpp/" class="flex items-center gap-3 inline-flex group">
+        <div class="flex items-center justify-center h-12">
+          <img src="assets/maestro-logo.png" width="56" style="height:auto;" alt="Logomarca Maestro">
         </div>
         <div>
           <div class="text-lg font-semibold text-dark">Maestro</div>
           <div class="text-xs text-slate-500">WhatsApp Orchestrator</div>
         </div>
-      </div>
+      </a>
 
       <?php if ($showAdminControls): ?>
       <button onclick="openCreateModal()" class="mt-4 w-full px-4 py-2 rounded-xl bg-primary text-white font-medium hover:opacity-90 transition">

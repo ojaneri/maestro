@@ -391,13 +391,15 @@ if (isset($_GET['ajax_send']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
   <!-- SIDEBAR / INSTÂNCIAS (PRESERVED FROM ORIGINAL) -->
   <aside class="w-80 bg-white border-r border-mid hidden lg:flex flex-col h-screen overflow-hidden">
     <div class="p-6 border-b border-mid">
-      <div class="flex items-center gap-3">
-        <div class="w-10 h-10 rounded-xl bg-primary"></div>
+    <a href="/api/envio/wpp/" class="flex items-center gap-3 inline-flex group">
+        <div class="flex items-center justify-center h-12">
+          <img src="assets/maestro-logo.png" width="56" style="height:auto;" alt="Logomarca Maestro">
+        </div>
         <div>
           <div class="text-lg font-semibold text-dark">Maestro</div>
           <div class="text-xs text-slate-500">WhatsApp Orchestrator</div>
         </div>
-      </div>
+      </a>
 
       <div class="mt-4 w-full px-4 py-2 rounded-xl bg-light border border-mid text-sm text-slate-500 text-center">
         <?= htmlspecialchars($instance['name']) ?>

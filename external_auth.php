@@ -219,7 +219,7 @@ function createExternalUser(string $name, string $email, string $password, strin
     return getExternalUserById((int)$lastId) ?: [];
 }
 
-function sendExternalAccessNotice(string $email, string $name, array $instanceNames): void
+function sendExternalAccessNotice(string $email, string $name, ?string $password, array $instanceNames): void
 {
     $baseUrl = rtrim($_ENV['PANEL_BASE_URL'] ?? ($_SERVER['HTTP_HOST'] ?? '/api/envio/wpp'), '/');
     if (strpos($baseUrl, 'http') !== 0) {
@@ -228,6 +228,7 @@ function sendExternalAccessNotice(string $email, string $name, array $instanceNa
     }
     $instanceList = $instanceNames ? implode(", ", $instanceNames) : 'Sem instâncias associadas';
     $subject = "Acesso ao Conversas • Maestro";
+    $passwordLine = $password ? "Senha: {$password}" : "Solicite sua senha ao administrador do sistema.";
     $message = <<<EOT
 Olá {$name},
 
@@ -236,8 +237,7 @@ Seu acesso ao painel de conversas foi criado.
 Login: {$email}
 Instâncias autorizadas: {$instanceList}
 Link de login: {$baseUrl}/login.php
-
-Solicite sua senha ao administrador do sistema.
+{$passwordLine}
 
 Atenciosamente,
 Equipe Maestro
