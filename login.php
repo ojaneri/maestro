@@ -25,6 +25,18 @@ ensureExternalUsersSchema();
 session_start();
 debug_log('login.php: session started');
 
+// Brute-force protection settings
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_TIME = 300; // 5 minutes in seconds
+
+// Initialize or update failed attempts counter
+if (!isset($_SESSION['failed_attempts'])) {
+    $_SESSION['failed_attempts'] = 0;
+}
+if (!isset($_SESSION['last_attempt_time'])) {
+    $_SESSION['last_attempt_time'] = time();
+}
+
 $validEmail = strtolower(trim($_ENV['PANEL_USER_EMAIL'] ?? ''));
 $validPass  = $_ENV['PANEL_PASSWORD'] ?? '';
 
@@ -40,49 +52,75 @@ if (isset($_SESSION['auth']) || isset($_SESSION['external_user'])) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $email = strtolower(trim($_POST['email'] ?? ''));
-    $password = $_POST['password'] ?? '';
-    if ($email === '' || $password === '') {
-        $errorMessage = 'Informe e-mail e senha.';
-    } elseif ($validEmail !== '' && $email === $validEmail && $password === $validPass) {
-        session_regenerate_id(true);
-        $_SESSION['auth'] = true;
-        debug_log('login.php: admin login success');
-        header('Location: /api/envio/wpp/');
-        exit;
+    if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+        $errorMessage = 'Requisição inválida.';
     } else {
-        $user = getExternalUserByEmail($email);
-        if (!$user || !password_verify($password, $user['password_hash'])) {
-            $errorMessage = 'E-mail ou senha inválidos.';
-            debug_log("login.php: external login failed for {$email}");
-        } elseif ($user['status'] !== 'active') {
-            $errorMessage = 'Acesso bloqueado. Contate o administrador.';
-            debug_log("login.php: external login blocked for {$email}");
-        } else {
-            $instances = getExternalUserInstances((int)$user['id']);
-            if (empty($instances)) {
-                $errorMessage = 'Nenhuma instância atribuída.';
-                debug_log("login.php: user {$email} has no instances");
+        // Brute-force check
+        if ($_SESSION['failed_attempts'] >= MAX_FAILED_ATTEMPTS) {
+            $time_elapsed = time() - $_SESSION['last_attempt_time'];
+            if ($time_elapsed < LOCKOUT_TIME) {
+                $remaining_time = LOCKOUT_TIME - $time_elapsed;
+                $errorMessage = "Muitas tentativas de login. Tente novamente em {$remaining_time} segundos.";
+                debug_log('login.php: brute-force lockout active for ' . $_SERVER['REMOTE_ADDR']);
             } else {
+                // Lockout time expired, reset counter
+                $_SESSION['failed_attempts'] = 0;
+                $_SESSION['last_attempt_time'] = time();
+            }
+        }
+
+        if (!$errorMessage) { // Only proceed if not already locked out
+            $email = strtolower(trim($_POST['email'] ?? ''));
+            $password = $_POST['password'] ?? '';
+            if ($email === '' || $password === '') {
+                $errorMessage = 'Informe e-mail e senha.';
+            } elseif ($validEmail !== '' && $email === $validEmail && $password === $validPass) {
                 session_regenerate_id(true);
-                $_SESSION['external_user'] = [
-                    'id' => (int)$user['id'],
-                    'name' => $user['name'],
-                    'email' => $user['email'],
-                    'role' => $user['role'],
-                    'instances' => array_map(fn($instanceId) => ['instance_id' => $instanceId], $instances)
-                ];
-                debug_log("login.php: external login success for {$email} role {$user['role']}");
-                if ($user['role'] === 'manager') {
-                    header("Location: /api/envio/wpp/");
-                } else {
-                    header("Location: /api/envio/wpp/external_dashboard.php");
-                }
+                $_SESSION['auth'] = true;
+                $_SESSION['failed_attempts'] = 0; // Reset on successful login
+                debug_log('login.php: admin login success');
+                header('Location: /api/envio/wpp/');
                 exit;
+            } else {
+                $user = getExternalUserByEmail($email);
+                if (!$user || !password_verify($password, $user['password_hash'])) {
+                    $_SESSION['failed_attempts']++; // Increment on failed attempt
+                    $_SESSION['last_attempt_time'] = time();
+                    $errorMessage = 'E-mail ou senha inválidos.';
+                    debug_log("login.php: external login failed for {$email} attempts: {$_SESSION['failed_attempts']}");
+                } elseif ($user['status'] !== 'active') {
+                    $errorMessage = 'Acesso bloqueado. Contate o administrador.';
+                    debug_log("login.php: external login blocked for {$email}");
+                } else {
+                    $instances = getExternalUserInstances((int)$user['id']);
+                    if (empty($instances)) {
+                        $errorMessage = 'Nenhuma instância atribuída.';
+                        debug_log("login.php: user {$email} has no instances");
+                    } else {
+                        session_regenerate_id(true);
+                        $_SESSION['external_user'] = [
+                            'id' => (int)$user['id'],
+                            'name' => $user['name'],
+                            'email' => $user['email'],
+                            'role' => $user['role'],
+                            'instances' => array_map(fn($instanceId) => ['instance_id' => $instanceId], $instances)
+                        ];
+                        $_SESSION['failed_attempts'] = 0; // Reset on successful login
+                        debug_log("login.php: external login success for {$email} role {$user['role']}");
+                        if ($user['role'] === 'manager') {
+                            header("Location: /api/envio/wpp/");
+                        } else {
+                            header("Location: /api/envio/wpp/external_dashboard.php");
+                        }
+                        exit;
+                    }
+                }
             }
         }
     }
 }
+
+$_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 ?>
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -181,6 +219,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <?php endif; ?>
 
     <form method="post">
+        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
         <label for="email">E-mail</label>
         <input type="email" id="email" name="email" required autofocus>
 
@@ -189,6 +228,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         <button type="submit">Entrar</button>
     </form>
+  <footer class="w-full bg-slate-900 text-slate-200 text-xs text-center py-3 mt-6">
+    Por <strong>Osvaldo J. Filho</strong> |
+    <a href="https://linkedin.com/in/ojaneri" class="text-sky-400 hover:underline" target="_blank" rel="noreferrer">LinkedIn</a> |
+    <a href="https://github.com/ojaneri/maestro" class="text-sky-400 hover:underline" target="_blank" rel="noreferrer">GitHub</a>
+  </footer>
 </div>
 </body>
 </html>

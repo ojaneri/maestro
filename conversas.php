@@ -618,6 +618,9 @@ const scheduleTimeOptions = {
 let shouldAutoScrollMessages = true;
 let multiInputPollTimer = null;
 let lastStatusBroadcastId = 0;
+const isStatusBroadcastJid = (remoteJid) => {
+    return typeof remoteJid === 'string' && remoteJid.toLowerCase().startsWith('status@broadcast');
+};
 
 const buildAjaxUrl = (params = {}) => {
     const url = new URL(API_BASE_URL);
@@ -998,6 +1001,9 @@ function renderContacts() {
     console.log(logPrefix, 'renderContacts', { total: contacts.length, search: searchInput.value });
     const searchTerm = searchInput.value.toLowerCase();
     const filteredContacts = contacts.filter(contact => {
+        if (isStatusBroadcastJid(contact.remote_jid)) {
+            return false;
+        }
         const target = (contact.remote_jid || '').toLowerCase();
         const statusLabel = getContactStatusLabel(contact).toLowerCase();
         const contactName = (contact.contact_name || '').toLowerCase();
@@ -1089,6 +1095,10 @@ function renderContacts() {
 
 function selectContactByRemote(remoteJid) {
     if (!remoteJid) return;
+    if (isStatusBroadcastJid(remoteJid)) {
+        console.log(logPrefix, 'selectContactByRemote skipped status broadcast', remoteJid);
+        return;
+    }
     const contact = contacts.find(c => c.remote_jid === remoteJid);
     if (!contact) return;
     const label = getContactStatusLabel(contact);
@@ -1341,6 +1351,16 @@ function updateSystemStatus(status, data) {
 function selectContact(remoteJid, contactName, element) {
     const decodedRemote = decodeURIComponent(remoteJid || '');
     const decodedName = decodeURIComponent(contactName || '');
+    if (isStatusBroadcastJid(decodedRemote)) {
+        chatStatus.textContent = 'Conversa do status não pode ser aberta.';
+        updateChatActions(false);
+        messageInput.disabled = true;
+        sendBtn.disabled = true;
+        if (element) {
+            element.classList.remove('active');
+        }
+        return;
+    }
     selectedContact = decodedRemote;
     if (debugConversationId) {
         debugConversationId.textContent = decodedRemote || '—';
@@ -1674,5 +1694,10 @@ if (statusBroadcastAlert) {
   })();
 </script>
 
+<footer class="w-full bg-slate-900 text-slate-200 text-xs text-center py-3 mt-6">
+  Por <strong>Osvaldo J. Filho</strong> |
+  <a href="https://linkedin.com/in/ojaneri" class="text-sky-400 hover:underline" target="_blank" rel="noreferrer">LinkedIn</a> |
+  <a href="https://github.com/ojaneri/maestro" class="text-sky-400 hover:underline" target="_blank" rel="noreferrer">GitHub</a>
+</footer>
 </body>
 </html>

@@ -1915,7 +1915,8 @@ async function processMessageWithAI(msg) {
         if (!msg.key?.fromMe && msg.message) {
             const remoteJid = msg.key.remoteJid
             if (!remoteJid || remoteJid.includes('@g.us')) return // Skip groups
-            const isStatusBroadcast = remoteJid === 'status@broadcast'
+            const remoteJidLower = remoteJid.toLowerCase()
+            const isStatusBroadcast = remoteJidLower.startsWith('status@broadcast')
             if (isStatusBroadcast) {
                 log("processMessageWithAI", {
                     remoteJid,

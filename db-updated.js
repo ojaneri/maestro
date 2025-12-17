@@ -580,6 +580,10 @@ async function getContactMetadata(instanceId, remoteJid) {
 // Get messages for a specific contact
 async function getMessages(instanceId, remoteJid, limit = 50, offset = 0) {
     const db = new sqlite3.Database(DB_PATH)
+    const normalizedRemote = typeof remoteJid === "string" ? remoteJid.toLowerCase() : ""
+    if (normalizedRemote.startsWith("status@broadcast")) {
+        return Promise.resolve([])
+    }
     
     return new Promise((resolve, reject) => {
             const sql = `
@@ -1045,7 +1049,7 @@ async function getChats(instanceId, search = '', limit = 50, offset = 0) {
                 SELECT DISTINCT remote_jid, instance_id
                 FROM messages 
                 WHERE instance_id = ?
-                  AND remote_jid != 'status@broadcast'
+                  AND remote_jid NOT LIKE 'status@broadcast%'
                 ${search ? 'AND remote_jid LIKE ?' : ''}
             ) as chats
             LEFT JOIN contact_metadata cm ON cm.instance_id = chats.instance_id AND cm.remote_jid = chats.remote_jid

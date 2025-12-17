@@ -987,13 +987,15 @@ $finishedCount = count($finishedCampaigns);
   <div class="min-h-screen bg-light text-dark">
     <div class="max-w-6xl mx-auto py-10 px-4 space-y-6">
       <header class="flex flex-col gap-2">
-        <div class="flex items-center gap-3">
-          <a href="index.php" class="text-sm text-slate-500 hover:text-dark">← Painel principal</a>
-          <h1 class="text-2xl font-semibold">Campanhas</h1>
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <h1 class="text-2xl font-semibold">Campanhas</h1>
+            <p class="text-sm text-slate-500">Monitore e programe envios em lote com persistência completa.</p>
+          </div>
+          <a href="index.php" class="rounded-2xl border border-slate-300 px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 transition">
+            Voltar ao painel principal
+          </a>
         </div>
-        <p class="text-sm text-slate-500">
-          Monitore e programe envios em lote com persistência completa.
-        </p>
       </header>
 
       <div class="grid md:grid-cols-3 gap-6">

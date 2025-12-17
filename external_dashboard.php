@@ -129,6 +129,11 @@ foreach ($externalUser['instances'] as $entry) {
   <?php endif; ?>
 
   <a class="logout" href="logout.php">Sair</a>
+  <footer class="w-full bg-slate-900 text-slate-200 text-xs text-center py-3 mt-6">
+    Por <strong>Osvaldo J. Filho</strong> |
+    <a href="https://linkedin.com/in/ojaneri" class="text-sky-400 hover:underline" target="_blank" rel="noreferrer">LinkedIn</a> |
+    <a href="https://github.com/ojaneri/maestro" class="text-sky-400 hover:underline" target="_blank" rel="noreferrer">GitHub</a>
+  </footer>
 </div>
 </body>
 </html>

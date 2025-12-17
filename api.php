@@ -17,7 +17,7 @@ debug_log('api.php: Request received');
 // Verificar API KEY
 // ==================
 $apiKey = $_SERVER["HTTP_X_API_KEY"] ?? null;
-debug_log('API Key received: ' . ($apiKey ? substr($apiKey, 0, 8) . '...' : 'none'));
+// debug_log('API Key received: ' . ($apiKey ? substr($apiKey, 0, 8) . '...' : 'none'));
 
 if (!$apiKey) {
     debug_log('API Key missing, returning 401');
@@ -40,12 +40,12 @@ if (!$instanceId || !$port) {
     die(json_encode(["error" => "Instance configuration incomplete"]));
 }
 
-debug_log('Valid API Key, instance ID: ' . $instanceId . ' port: ' . $port);
+debug_log('Valid API Key provided.');
 
 // Leitura do payload enviado pelo usuário
 $rawPayload = file_get_contents("php://input");
 $payload = json_decode($rawPayload, true);
-debug_log('Payload received: ' . json_encode($payload));
+// debug_log('Payload received: ' . json_encode($payload));
 
 function logOutgoingMessage(string $instanceId, string $to, string $message): void {
     $dbPath = __DIR__ . '/chat_data.db';

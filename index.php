@@ -231,6 +231,21 @@ debug_log('PANEL_PASSWORD from getenv: ' . (getenv('PANEL_PASSWORD') ?: 'not set
 
 // --- Autenticação ---
 session_start();
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+
+// CSRF check for all POST requests
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+        debug_log('CSRF token mismatch on POST request.');
+        http_response_code(403);
+        echo "Requisição inválida: Token CSRF ausente ou incorreto.";
+        exit;
+    }
+}
+
 debug_log('Session started. Auth: ' . (isset($_SESSION['auth']) ? 'true' : 'false'));
 ensureExternalUsersSchema();
 $externalUser = $_SESSION['external_user'] ?? null;
@@ -304,7 +319,9 @@ if (!function_exists('renderSidebarContent')) {
     ?>
     <div class="p-6 border-b border-mid">
       <div class="flex items-center gap-3">
-        <div class="w-10 h-10 rounded-xl bg-primary"></div>
+        <div class="flex items-center justify-center h-10">
+          <img src="assets/maestro-logo.png" width="48" style="height:auto;" alt="Logomarca Maestro">
+        </div>
         <div>
           <div class="text-lg font-semibold text-dark">Maestro</div>
           <div class="text-xs text-slate-500">WhatsApp Orchestrator</div>
@@ -317,6 +334,9 @@ if (!function_exists('renderSidebarContent')) {
       </button>
       <button onclick="window.location.href='campanhas.php'" class="mt-3 w-full px-4 py-2 rounded-xl border border-primary text-primary font-medium hover:bg-primary/5 transition">
         Campanhas
+      </button>
+      <button onclick="window.location.href='external_access.php'" class="mt-3 w-full px-4 py-2 rounded-xl border border-primary text-primary font-medium hover:bg-primary/5 transition">
+        Acessos
       </button>
       <?php endif; ?>
 
@@ -635,71 +655,6 @@ if (isset($_POST['create'])) {
     exit;
 }
 
-$externalUserMessage = '';
-$externalUserError = '';
-if ($isAdmin && $_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (isset($_POST['delete_external_user'])) {
-        $deleteId = (int)($_POST['delete_user_id'] ?? 0);
-        if ($deleteId && deleteExternalUser($deleteId)) {
-            $externalUserMessage = 'Acesso removido com sucesso.';
-        } else {
-            $externalUserError = 'Falha ao remover o acesso.';
-        }
-    } elseif (isset($_POST['update_external_user'])) {
-        $updateId = (int)($_POST['update_user_id'] ?? 0);
-        $updateRole = ($_POST['update_role'] ?? '') === 'manager' ? 'manager' : 'user';
-        $updateStatus = ($_POST['update_status'] ?? '') === 'inactive' ? 'inactive' : 'active';
-        $updateInstances = array_unique(array_filter((array)($_POST['update_instances'] ?? [])));
-        if (!$updateId) {
-            $externalUserError = 'Usuário inválido.';
-        } elseif (empty($updateInstances)) {
-            $externalUserError = 'Selecione pelo menos uma instância.';
-        } else {
-            $updated = updateExternalUserProfile($updateId, $updateRole, $updateStatus);
-            if ($updated) {
-                setExternalUserInstances($updateId, $updateInstances);
-                $externalUserMessage = 'Acesso atualizado com sucesso.';
-            } else {
-                $externalUserError = 'Não houve alterações ou o usuário não foi encontrado.';
-            }
-        }
-    } elseif (isset($_POST['create_external_user'])) {
-        $createName = trim($_POST['external_name'] ?? '');
-        $createEmail = strtolower(trim($_POST['external_email'] ?? ''));
-        $createRole = ($_POST['external_role'] ?? '') === 'manager' ? 'manager' : 'user';
-        $createInstances = array_unique(array_filter((array)($_POST['external_instances'] ?? [])));
-        if ($createName === '' || !filter_var($createEmail, FILTER_VALIDATE_EMAIL)) {
-            $externalUserError = 'Informe nome e e-mail válidos.';
-        } elseif (empty($createInstances)) {
-            $externalUserError = 'Selecione pelo menos uma instância.';
-        } else {
-            try {
-                $password = bin2hex(random_bytes(6));
-                $created = createExternalUser($createName, $createEmail, $password, $createRole, $createInstances);
-                $instanceLabels = [];
-                foreach ($createInstances as $instanceId) {
-                    $instanceLabels[] = $instances[$instanceId]['name'] ?? $instanceId;
-                }
-                sendExternalAccessNotice($createEmail, $createName, $instanceLabels);
-                $externalUserMessage = "Acesso {$createEmail} criado e e-mail enviado.";
-            } catch (Exception $err) {
-                $externalUserError = $err->getMessage();
-            }
-        }
-    }
-}
-
-$externalUsersList = [];
-if ($isAdmin) {
-    $externalUsersList = listExternalUsers();
-    foreach ($externalUsersList as &$userRow) {
-        $userInstances = getExternalUserInstances((int)$userRow['id']);
-        $userRow['instance_ids'] = $userInstances;
-        $userRow['instance_names'] = array_map(fn($instanceId) => $instances[$instanceId]['name'] ?? $instanceId, $userInstances);
-    }
-    unset($userRow);
-}
-
 // --- Ações ---
 if (isset($_GET["delete"])) {
     $deleteId = $_GET["delete"];
@@ -973,6 +928,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_instance']) &&
         <?php endif; ?>
         <?php if ($selectedInstance && strtolower($connectionStatuses[$selectedInstanceId] ?? '') === 'connected'): ?>
           <form method="POST" class="inline">
+            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']); ?>">
             <input type="hidden" name="disconnect" value="<?= $selectedInstanceId ?>">
             <button type="submit" class="px-4 py-2 rounded-xl bg-error text-white font-medium hover:opacity-90">
               Desconectar
@@ -1009,6 +965,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_instance']) &&
         }
         ?>
         <form id="sendForm" method="POST" action="?instance=<?= $selectedInstanceId ?>">
+          <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']); ?>">
           <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div>
               <label class="text-xs text-slate-500">Número destino</label>
@@ -1042,6 +999,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_instance']) &&
       $quickConfigBaseUrl = $selectedInstance['base_url'] ?? ("http://127.0.0.1:" . ($selectedInstance['port'] ?? ''));
       ?>
       <form method="POST" class="space-y-3">
+        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']); ?>">
         <div>
           <label class="text-xs text-slate-500">Nome da instância</label>
           <input name="instance_name" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
@@ -1406,133 +1364,13 @@ Como usar:
       <div id="historyStatus" class="text-xs text-slate-500 mt-3">Carregando histórico...</div>
       <div id="historyList" class="mt-4 space-y-3"></div>
     </section>
-
-    <?php if ($isAdmin): ?>
-      <section class="bg-white border border-mid rounded-2xl p-6 mt-6 space-y-6">
-        <div class="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <h2 class="text-lg font-semibold text-dark">Gerenciar acessos externos</h2>
-            <p class="text-xs text-slate-500">Crie logins para usuários (conversas) ou gerentes (configurações limitadas).</p>
-          </div>
-          <div class="text-[11px] text-slate-500">
-            <?php if ($externalUserMessage): ?>
-              <span class="text-success font-semibold"><?= htmlspecialchars($externalUserMessage) ?></span>
-            <?php elseif ($externalUserError): ?>
-              <span class="text-error font-semibold"><?= htmlspecialchars($externalUserError) ?></span>
-            <?php else: ?>
-              <span>Será enviado um e-mail com a senha temporária.</span>
-            <?php endif; ?>
-          </div>
-        </div>
-
-        <form method="post" class="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <input type="hidden" name="create_external_user" value="1">
-          <div>
-            <label class="text-[11px] text-slate-500">Nome</label>
-            <input type="text" name="external_name" class="mt-1 w-full rounded-2xl border border-mid px-3 py-2" required>
-          </div>
-          <div>
-            <label class="text-[11px] text-slate-500">E-mail</label>
-            <input type="email" name="external_email" class="mt-1 w-full rounded-2xl border border-mid px-3 py-2" required>
-          </div>
-          <div>
-            <label class="text-[11px] text-slate-500">Perfil</label>
-            <select name="external_role" class="mt-1 w-full rounded-2xl border border-mid px-3 py-2">
-              <option value="user">Usuário (somente conversas)</option>
-              <option value="manager">Gerente (configurações)</option>
-            </select>
-          </div>
-          <div class="md:col-span-3">
-            <label class="text-[11px] text-slate-500">Instâncias autorizadas</label>
-            <div class="mt-1 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              <?php foreach ($instances as $instanceId => $inst): ?>
-                <label class="flex items-center gap-2 text-xs text-slate-600">
-                  <input type="checkbox" name="external_instances[]" value="<?= htmlspecialchars($instanceId) ?>">
-                  <?= htmlspecialchars($inst['name'] ?? $instanceId) ?>
-                </label>
-              <?php endforeach; ?>
-            </div>
-          </div>
-          <div class="md:col-span-3">
-            <button type="submit" class="w-full rounded-2xl bg-primary px-4 py-2 text-white font-semibold hover:opacity-90 transition">
-              Criar acesso e enviar e-mail
-            </button>
-          </div>
-        </form>
-
-        <div class="space-y-3">
-          <h3 class="text-sm font-semibold text-slate-800">Acessos registrados</h3>
-          <?php if (empty($externalUsersList)): ?>
-            <p class="text-xs text-slate-500">Nenhum acesso externo registrado.</p>
-          <?php else: ?>
-            <div class="space-y-2">
-          <?php foreach ($externalUsersList as $userRow): ?>
-            <?php
-              $userInstances = $userRow['instance_ids'] ?? [];
-              $userRole = $userRow['role'] ?? 'user';
-              $userStatus = $userRow['status'] ?? 'active';
-              $userId = (int)($userRow['id'] ?? 0);
-            ?>
-              <div class="rounded-2xl border border-mid px-4 py-3 bg-slate-50 space-y-3">
-                <div class="flex items-start justify-between gap-3">
-                  <div>
-                    <div class="text-sm font-semibold text-slate-800"><?= htmlspecialchars($userRow['name'] ?? '') ?></div>
-                    <div class="text-[11px] text-slate-500"><?= htmlspecialchars($userRow['email'] ?? '') ?></div>
-                  </div>
-                  <div class="text-[11px] uppercase <?= $userStatus === 'active' ? 'text-success' : 'text-error' ?>">
-                    <?= htmlspecialchars($userStatus === 'active' ? 'Ativo' : 'Inativo') ?>
-                  </div>
-                </div>
-                <div class="text-[11px] text-slate-500">
-                  Papel atual: <?= htmlspecialchars(ucfirst($userRole)) ?>
-                </div>
-                <form method="post" class="space-y-3">
-                  <input type="hidden" name="update_external_user" value="1">
-                  <input type="hidden" name="update_user_id" value="<?= $userId ?>">
-                  <div class="flex flex-wrap gap-3 text-[11px]">
-                    <label class="flex items-center gap-2">
-                      <span>Perfil</span>
-                      <select name="update_role" class="rounded-2xl border border-mid px-2 py-1 bg-white text-xs">
-                        <option value="user" <?= $userRole === 'user' ? 'selected' : '' ?>>Usuário</option>
-                        <option value="manager" <?= $userRole === 'manager' ? 'selected' : '' ?>>Gerente</option>
-                      </select>
-                    </label>
-                    <label class="flex items-center gap-2">
-                      <span>Status</span>
-                      <select name="update_status" class="rounded-2xl border border-mid px-2 py-1 bg-white text-xs">
-                        <option value="active" <?= $userStatus === 'active' ? 'selected' : '' ?>>Ativo</option>
-                        <option value="inactive" <?= $userStatus === 'inactive' ? 'selected' : '' ?>>Inativo</option>
-                      </select>
-                    </label>
-                  </div>
-                  <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 text-[11px]">
-                    <?php foreach ($instances as $instanceId => $inst): ?>
-                      <label class="flex items-center gap-2 text-slate-600">
-                        <input type="checkbox" name="update_instances[]" value="<?= htmlspecialchars($instanceId) ?>"
-                               <?= in_array($instanceId, $userInstances, true) ? 'checked' : '' ?>>
-                        <?= htmlspecialchars($inst['name'] ?? $instanceId) ?>
-                      </label>
-                    <?php endforeach; ?>
-                  </div>
-                  <div class="flex gap-2">
-                    <button type="submit" class="rounded-2xl bg-primary px-3 py-1 text-xs text-white">Salvar</button>
-                    <button type="submit" name="delete_external_user" value="1"
-                        class="rounded-2xl border border-error px-3 py-1 text-xs text-error hover:bg-error/10">
-                      Excluir acesso
-                    </button>
-                    <input type="hidden" name="delete_user_id" value="<?= $userId ?>">
-                  </div>
-                </form>
-              </div>
-          <?php endforeach; ?>
-            </div>
-          <?php endif; ?>
-        </div>
-      </section>
-    <?php endif; ?>
-
   </main>
 </div>
+<footer class="w-full bg-slate-900 text-slate-200 text-xs text-center py-3 mt-6">
+  Por <strong>Osvaldo J. Filho</strong> |
+  <a href="https://linkedin.com/in/ojaneri" class="text-sky-400 hover:underline" target="_blank" rel="noreferrer">LinkedIn</a> |
+  <a href="https://github.com/ojaneri/maestro" class="text-sky-400 hover:underline" target="_blank" rel="noreferrer">GitHub</a>
+</footer>
 <!-- Modal for Create Instance -->
 <div id="createModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
   <div class="bg-white rounded-2xl p-6 w-full max-w-md mx-4">
@@ -1541,6 +1379,7 @@ Como usar:
       <button onclick="closeCreateModal()" class="text-slate-500 hover:text-dark">&times;</button>
     </div>
     <form method="POST">
+      <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']); ?>">
       <div class="mb-4">
         <label class="text-xs text-slate-500">Nome da instância</label>
         <input type="text" name="name" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light" placeholder="Ex: Instância Principal" required>
