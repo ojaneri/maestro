@@ -2,19 +2,25 @@
   "name": "whatsapp-server",
   "version": "1.0.0",
   "description": "WhatsApp server for sending messages",
-  "main": "whatsapp-server.js",
+  "main": "whatsapp-server-intelligent.js",
   "scripts": {
-    "start": "node whatsapp-server.js"
+    "start": "node whatsapp-server-intelligent.js",
+    "migrate-instances": "node migrate_instances.js"
   },
   "dependencies": {
+    "@google/genai": "^1.33.0",
     "@whiskeysockets/baileys": "^7.0.0-rc.8",
     "body-parser": "^1.20.3",
     "express": "^4.21.2",
+    "mime-types": "^3.0.2",
     "minimist": "^1.2.8",
+    "mysql2": "^3.15.3",
+    "node-fetch": "^3.3.2",
     "openai": "^4.104.0",
     "qrcode": "^1.5.4",
     "sqlite": "^5.1.1",
     "sqlite3": "^5.1.7",
+    "undici": "^5.4.0",
     "uuid": "^9.0.1",
     "ws": "^8.18.3"
   },

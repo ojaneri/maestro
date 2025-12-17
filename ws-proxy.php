@@ -14,29 +14,34 @@ if (file_exists('debug')) {
 
 debug_log('WebSocket proxy request: ' . $_SERVER['REQUEST_URI']);
 
-// Load instances configuration
-$instances = json_decode(file_get_contents("instances.json"), true);
-if (!$instances) {
-    die(json_encode(["error" => "Cannot load instances configuration"]));
-}
+require_once __DIR__ . '/instance_data.php';
 
 // Get instance ID from query parameters or path
 $instanceId = $_GET['instance'] ?? null;
 if (!$instanceId) {
-    // Try to extract from path
     $path = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
     if (preg_match('/\/ws\/([^\/]+)/', $path, $matches)) {
         $instanceId = $matches[1];
     }
 }
 
-if (!$instanceId || !isset($instances[$instanceId])) {
+if (!$instanceId) {
     http_response_code(404);
     die(json_encode(["error" => "Instance not found"]));
 }
 
-$instance = $instances[$instanceId];
-$port = $instance['port'];
+$instance = loadInstanceRecordFromDatabase($instanceId);
+if (!$instance) {
+    http_response_code(404);
+    die(json_encode(["error" => "Instance not found"]));
+}
+
+$port = $instance['port'] ?? null;
+if (!$port) {
+    http_response_code(500);
+    die(json_encode(["error" => "Instance port not configured"]));
+}
+
 $internalWsUrl = "ws://127.0.0.1:$port/ws";
 
 debug_log("Setting up WebSocket proxy for instance $instanceId on port $port");
@@ -49,14 +54,13 @@ if (!isset($_SERVER['HTTP_UPGRADE']) || strtolower($_SERVER['HTTP_UPGRADE']) !==
 
 // WebSocket implementation using ReactPHP would be ideal, but for PHP 7.4 compatibility,
 // we'll create a polling-based proxy that bridges HTTP and WebSocket connections
-handleWebSocketProxy($internalWsUrl, $instanceId, $instances);
+handleWebSocketProxy($internalWsUrl, $instanceId, $instance);
 
 /**
  * Handle WebSocket proxy connections
  * This is a simplified implementation that bridges HTTP long-polling to simulate WebSocket behavior
  */
-function handleWebSocketProxy($internalWsUrl, $instanceId, $instances) {
-    global $instance;
+function handleWebSocketProxy($internalWsUrl, $instanceId, $instance) {
     
     debug_log("Establishing WebSocket proxy for $instanceId");
     
@@ -177,15 +181,24 @@ function checkInternalStatus($internalWsUrl, $instanceId) {
 /**
  * Handle HTTP fallback for clients that don't support WebSocket
  */
-function handleHttpFallback($instanceId, $instances) {
+function handleHttpFallback($instance) {
     header("Content-Type: application/json");
     
-    $instance = $instances[$instanceId];
-    $port = $instance['port'];
-    $baseUrl = "http://127.0.0.1:$port";
+    $instanceId = $instance['instance_id'] ?? '';
+    $port = $instance['port'] ?? null;
+    $baseUrl = $port ? "http://127.0.0.1:$port" : '';
     
     debug_log("HTTP fallback for instance: $instanceId");
     
+    if (!$port) {
+        echo json_encode([
+            "success" => false,
+            "error" => "Instance port not configured",
+            "instance" => $instanceId
+        ]);
+        return;
+    }
+
     // Check if instance is running
     $ch = curl_init($baseUrl . '/status');
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
@@ -217,7 +230,7 @@ function handleHttpFallback($instanceId, $instances) {
 
 // If this is an HTTP request (not WebSocket), provide fallback
 if ($_SERVER['REQUEST_METHOD'] !== 'GET' || !isset($_SERVER['HTTP_UPGRADE'])) {
-    handleHttpFallback($instanceId, $instances);
+    handleHttpFallback($instance);
     exit;
 }
 ?>
