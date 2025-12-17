@@ -24,3 +24,4 @@ chat_data.db
 .DS_Store
 Thumbs.db
 debug.log
+gemini.php
