@@ -132,6 +132,14 @@ heal_instances() {
     cleanup_removed_instances
 }
 
+run_monitor() {
+    local monitor="$BASEDIR/monitor_instances.php"
+    if [ -x "$(command -v php)" ] && [ -f "$monitor" ]; then
+        echo "[HEAL] rodando monitor..."
+        php "$monitor" >/dev/null 2>&1
+    fi
+}
+
 cleanup_removed_instances() {
     if [ -z "$PM2_BIN" ]; then
         return
@@ -140,7 +148,7 @@ cleanup_removed_instances() {
     mapfile -t desired_ids < <(list_instances | cut -d'|' -f1)
     export DESIRED_IDS="$(printf "%s\n" "${desired_ids[@]}")"
 
-    python3 - "$PM2_BIN" <<'PY'
+python3 - "$PM2_BIN" <<'PY'
 import json
 import os
 import subprocess
@@ -159,15 +167,39 @@ try:
 except json.JSONDecodeError:
     sys.exit(0)
 
-    for proc in processes:
-        name = proc.get('name', '')
-        if not name.startswith('wpp_'):
-            continue
-        instance_id = name.split('wpp_', 1)[1]
-        if instance_id and instance_id not in desired:
-            print(f"[HEAL] {instance_id} removida do registro → encerrando {name}")
-            subprocess.run([pm2_bin, 'delete', name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+for proc in processes:
+    name = proc.get('name', '')
+    if not name.startswith('wpp_'):
+        continue
+    instance_id = name.split('wpp_', 1)[1]
+    if instance_id and instance_id not in desired:
+        print(f"[HEAL] {instance_id} removida do registro → encerrando {name}")
+        subprocess.run([pm2_bin, 'delete', name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 PY
+
+    local marker="$BASEDIR/deleted_instances.txt"
+    if [ -f "$marker" ]; then
+        mapfile -t deleted_ids < "$marker"
+        : > "$marker"
+        for id in "${deleted_ids[@]}"; do
+            [ -z "$id" ] && continue
+            echo "[HEAL] Instância ${id} marcada como apagada → encerrando servidor"
+            stop_instance "$id"
+            rm -rf "$BASEDIR/auth_${id}"
+        done
+    fi
+
+    local desired_list="${DESIRED_IDS:-}"
+    for auth_dir in "$BASEDIR"/auth_*; do
+        [ ! -d "$auth_dir" ] && continue
+        inst_id="${auth_dir##*/auth_}"
+        [ -z "$inst_id" ] && continue
+        if printf '%s\n' "$desired_list" | grep -Fx "$inst_id" >/dev/null; then
+            continue
+        fi
+        echo "[HEAL] Removendo credenciais antigas de $inst_id"
+        rm -rf "$auth_dir"
+    done
 }
 
 install_service() {
@@ -236,6 +268,7 @@ case "$ACTION" in
         ;;
     --heal)
         heal_instances
+        run_monitor
         ;;
     --start)
         if [ "$TARGET" = "all" ]; then

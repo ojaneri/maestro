@@ -13,6 +13,15 @@ const SETTINGS_TABLE_SQL = `
         PRIMARY KEY (instance_id, key)
     )
 `
+const PERSISTENT_VARIABLES_TABLE_SQL = `
+    CREATE TABLE IF NOT EXISTS persistent_variables (
+        instance_id TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (instance_id, key)
+    )
+`
 const INSTANCES_TABLE_SQL = `
     CREATE TABLE IF NOT EXISTS instances (
         instance_id TEXT PRIMARY KEY,
@@ -45,6 +54,7 @@ function initDatabase() {
                     .then(() => ensureScheduledSchema(db))
                     .then(() => ensureContactContextSchema(db))
                     .then(() => ensureEventLogsSchema(db))
+                    .then(() => ensurePersistentVariablesSchema(db))
                     .then(() => resolve(db))
                     .catch(reject)
             }
@@ -108,6 +118,15 @@ const contactMetadataSQL = `
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         `
+        const whatsappCacheSQL = `
+            CREATE TABLE IF NOT EXISTS whatsapp_number_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                phone TEXT NOT NULL UNIQUE,
+                is_whatsapp INTEGER NOT NULL,
+                checked_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `
 
         const contactContextSQL = `
             CREATE TABLE IF NOT EXISTS contact_context (
@@ -135,11 +154,13 @@ const contactMetadataSQL = `
 
         const statements = [
             SETTINGS_TABLE_SQL,
+            PERSISTENT_VARIABLES_TABLE_SQL,
             INSTANCES_TABLE_SQL,
             messagesSQL,
             threadsSQL,
             contactMetadataSQL,
             scheduledSQL,
+            whatsappCacheSQL,
             contactContextSQL,
             eventLogsSQL
         ]
@@ -155,10 +176,12 @@ const contactMetadataSQL = `
             'CREATE INDEX IF NOT EXISTS idx_scheduled_instance_status ON scheduled_messages(instance_id, status)',
             'CREATE INDEX IF NOT EXISTS idx_scheduled_due ON scheduled_messages(scheduled_at)',
             'CREATE INDEX IF NOT EXISTS idx_scheduled_campaign ON scheduled_messages(campaign_id)',
+            'CREATE INDEX IF NOT EXISTS idx_whatsapp_cache_phone ON whatsapp_number_cache(phone)',
             'CREATE INDEX IF NOT EXISTS idx_contact_context_instance ON contact_context(instance_id)',
             'CREATE INDEX IF NOT EXISTS idx_contact_context_remote ON contact_context(remote_jid)',
             'CREATE INDEX IF NOT EXISTS idx_event_logs_instance ON event_logs(instance_id)',
-            'CREATE INDEX IF NOT EXISTS idx_event_logs_remote ON event_logs(remote_jid)'
+            'CREATE INDEX IF NOT EXISTS idx_event_logs_remote ON event_logs(remote_jid)',
+            'CREATE INDEX IF NOT EXISTS idx_persistent_vars_instance ON persistent_variables(instance_id)'
         ]
 
         db.serialize(() => {
@@ -381,6 +404,24 @@ function ensureEventLogsSchema(db) {
     })
 }
 
+function ensurePersistentVariablesSchema(db) {
+    return new Promise((resolve, reject) => {
+        const sql = `
+            CREATE TABLE IF NOT EXISTS persistent_variables (
+                instance_id TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value TEXT,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (instance_id, key)
+            )
+        `
+        db.run(sql, err => {
+            if (err) reject(err)
+            else resolve()
+        })
+    })
+}
+
 function ensureDirectionColumn(db) {
     return new Promise((resolve, reject) => {
         db.all(`PRAGMA table_info(messages)`, (err, rows) => {
@@ -586,15 +627,27 @@ async function getMessages(instanceId, remoteJid, limit = 50, offset = 0) {
     }
     
     return new Promise((resolve, reject) => {
-            const sql = `
-                SELECT id, role, direction, content, timestamp, metadata
-                FROM messages 
-                WHERE instance_id = ? AND remote_jid = ?
-                ORDER BY timestamp ASC 
-                LIMIT ? OFFSET ?
-            `
-        
-        db.all(sql, [instanceId, remoteJid, limit, offset], (err, rows) => {
+        const sqlBuilder = []
+        sqlBuilder.push(`
+            SELECT id, role, direction, content, timestamp, metadata
+            FROM messages 
+            WHERE instance_id = ? AND remote_jid = ?
+            ORDER BY timestamp ASC
+        `)
+        const params = [instanceId, remoteJid]
+        const normalizedLimit = Number.isFinite(limit) ? limit : 50
+        const normalizedOffset = Number.isFinite(offset) && offset > 0 ? offset : 0
+
+        if (normalizedLimit > 0) {
+            sqlBuilder.push("LIMIT ? OFFSET ?")
+            params.push(normalizedLimit, normalizedOffset)
+        } else if (normalizedOffset > 0) {
+            sqlBuilder.push("LIMIT -1 OFFSET ?")
+            params.push(normalizedOffset)
+        }
+
+        const finalSql = sqlBuilder.join("\n")
+        db.all(finalSql, params, (err, rows) => {
             db.close()
             if (err) reject(err)
             else resolve(rows)
@@ -612,7 +665,9 @@ async function getLastMessages(instanceId, remoteJid, limit = 15) {
             FROM (
                 SELECT role, content, id
                 FROM messages
-                WHERE instance_id = ? AND remote_jid = ?
+                WHERE instance_id = ?
+                  AND remote_jid = ?
+                  AND (metadata IS NULL OR metadata NOT LIKE '%"severity":"error"%')
                 ORDER BY id DESC
                 LIMIT ?
             ) sub
@@ -780,6 +835,65 @@ async function markPendingScheduledMessagesFailed(instanceId, remoteJid, reason 
     })
 }
 
+// ===== WHATSAPP NUMBER CACHE =====
+
+async function getWhatsAppNumberCache(phone, maxAgeDays = 90) {
+    const normalized = String(phone || "").replace(/\D/g, "")
+    if (!normalized) {
+        return null
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    const ttlDays = Number.isFinite(maxAgeDays) ? Math.max(1, maxAgeDays) : 90
+    const cutoff = `-${ttlDays} days`
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT phone, is_whatsapp, checked_at
+            FROM whatsapp_number_cache
+            WHERE phone = ?
+              AND checked_at >= datetime('now', ?)
+            LIMIT 1
+        `
+        db.get(sql, [normalized, cutoff], (err, row) => {
+            db.close()
+            if (err) {
+                reject(err)
+            } else if (!row) {
+                resolve(null)
+            } else {
+                resolve({
+                    phone: row.phone,
+                    exists: row.is_whatsapp === 1,
+                    checked_at: row.checked_at
+                })
+            }
+        })
+    })
+}
+
+async function setWhatsAppNumberCache(phone, exists) {
+    const normalized = String(phone || "").replace(/\D/g, "")
+    if (!normalized) {
+        return { saved: 0 }
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    const isWhatsapp = exists ? 1 : 0
+    return new Promise((resolve, reject) => {
+        const sql = `
+            INSERT INTO whatsapp_number_cache (phone, is_whatsapp, checked_at, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT(phone) DO UPDATE SET
+                is_whatsapp = excluded.is_whatsapp,
+                checked_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+        `
+        db.run(sql, [normalized, isWhatsapp], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ saved: this.changes })
+        })
+    })
+}
+
 
 async function updateScheduledMessageStatus(scheduledId, status, error = null) {
     const db = new sqlite3.Database(DB_PATH)
@@ -811,6 +925,26 @@ async function deleteScheduledMessage(scheduledId) {
             db.close()
             if (err) reject(err)
             else resolve({ changes: this.changes })
+        })
+    })
+}
+
+async function listContactContext(instanceId, remoteJid) {
+    if (!instanceId || !remoteJid) {
+        return []
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT key, value
+            FROM contact_context
+            WHERE instance_id = ? AND remote_jid = ?
+            ORDER BY key ASC
+        `
+        db.all(sql, [instanceId, remoteJid], (err, rows) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(rows || [])
         })
     })
 }
@@ -882,6 +1016,67 @@ async function deleteContactContext(instanceId, remoteJid, keys = null) {
             db.close()
             if (err) reject(err)
             else resolve({ deleted: this.changes })
+        })
+    })
+}
+
+async function setPersistentVariable(instanceId, key, value) {
+    if (!instanceId || !key) {
+        throw new Error("instanceId e key são obrigatórios para variáveis persistentes")
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            INSERT INTO persistent_variables (instance_id, key, value, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(instance_id, key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = CURRENT_TIMESTAMP
+        `
+        db.run(sql, [instanceId, key, value], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ updated: this.changes })
+        })
+    })
+}
+
+async function getPersistentVariable(instanceId, key) {
+    if (!instanceId || !key) {
+        return null
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT value
+            FROM persistent_variables
+            WHERE instance_id = ? AND key = ?
+            LIMIT 1
+        `
+        db.get(sql, [instanceId, key], (err, row) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(row ? row.value : null)
+        })
+    })
+}
+
+async function listPersistentVariables(instanceId) {
+    if (!instanceId) {
+        return []
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT key, value, updated_at
+            FROM persistent_variables
+            WHERE instance_id = ?
+            ORDER BY key ASC
+        `
+        db.all(sql, [instanceId], (err, rows) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(rows || [])
         })
     })
 }
@@ -1250,12 +1445,18 @@ module.exports = {
     deleteScheduledMessagesByTag,
     deleteScheduledMessagesByTipo,
     markPendingScheduledMessagesFailed,
+    listContactContext,
     setContactContext,
     getContactContext,
     deleteContactContext,
+    setPersistentVariable,
+    getPersistentVariable,
+    listPersistentVariables,
     logEvent,
     getTimeSinceLastInboundMessage,
     getScheduledMessages,
+    getWhatsAppNumberCache,
+    setWhatsAppNumberCache,
     // Instances
     saveInstanceRecord,
     getInstanceRecord,

@@ -16,6 +16,23 @@ if (file_exists('debug')) {
 }
 
 session_start();
+if (!isset($_SESSION['debug_log_event_timestamps'])) {
+    $_SESSION['debug_log_event_timestamps'] = [];
+}
+
+function should_log_debug_event($key, $windowSeconds = 5) {
+    global $_SESSION;
+    if (!is_string($key) || $key === '') {
+        $key = 'default';
+    }
+    $now = time();
+    $last = $_SESSION['debug_log_event_timestamps'][$key] ?? 0;
+    if (($now - $last) >= $windowSeconds) {
+        $_SESSION['debug_log_event_timestamps'][$key] = $now;
+        return true;
+    }
+    return false;
+}
 $externalUser = $_SESSION['external_user'] ?? null;
 $isManagerExternal = $externalUser && ($externalUser['role'] ?? '') === 'manager';
 if (!$externalUser && !isset($_SESSION['auth'])) {
@@ -36,7 +53,24 @@ if ($externalUser) {
     }
 }
 
-debug_log('Conversas dashboard loaded for instance: ' . $instanceId);
+$ajaxDebugKeys = [
+    'ajax_chats',
+    'ajax_messages',
+    'ajax_scheduled',
+    'ajax_schedule_delete',
+    'ajax_multi_input',
+    'ajax_health',
+    'ajax_status_notifications',
+    'ajax_schedule_create'
+];
+$isAjaxRequest = false;
+foreach ($ajaxDebugKeys as $key) {
+    if (isset($_GET[$key])) {
+        $isAjaxRequest = true;
+        break;
+    }
+}
+
 
 // Get instance details
 $instance = loadInstanceRecordFromDatabase($instanceId);
@@ -45,6 +79,12 @@ if (!$instance) {
     header("Location: /api/envio/wpp/");
     exit;
 }
+
+$dashboardBaseUrl = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
+if ($dashboardBaseUrl === '') {
+    $dashboardBaseUrl = '/';
+}
+$dashboardLogoUrl = "{$dashboardBaseUrl}/assets/maestro-logo.png";
 
 $instancePhoneLabel = formatInstancePhoneLabel($instance['phone'] ?? '');
 
@@ -62,6 +102,10 @@ function isPortOpen($host, $port, $timeout = 1) {
 $isRunning = isPortOpen('localhost', $instance['port']);
 $connectionStatus = $isRunning ? 'connected' : 'disconnected';
 
+if (!$isAjaxRequest && should_log_debug_event('dashboard_loaded_' . $instanceId, 10)) {
+    debug_log('Conversas dashboard loaded for instance: ' . $instanceId);
+}
+
 if ($isRunning) {
     // Try to get actual connection status
     $ch = curl_init("http://127.0.0.1:{$instance['port']}/health");
@@ -78,7 +122,9 @@ if ($isRunning) {
     }
 }
 
-debug_log('Instance status: ' . $connectionStatus);
+if (!$isAjaxRequest && should_log_debug_event('instance_status_' . $instanceId . '_' . $connectionStatus, 30)) {
+    debug_log('Instance status: ' . $connectionStatus);
+}
 
 function respondJson($payload, $status = 200) {
     header('Content-Type: application/json; charset=utf-8');
@@ -175,6 +221,16 @@ if (isset($_GET['ajax_messages'])) {
     if ($method === 'DELETE') {
         proxyNodeRequest($instance, $path, 'DELETE');
     }
+    if ($method === 'POST') {
+        $payload = json_decode(file_get_contents('php://input'), true);
+        if (!is_array($payload)) {
+            $payload = $_POST;
+        }
+        $action = strtolower(trim((string)($payload['action'] ?? '')));
+        if ($action === 'delete') {
+            proxyNodeRequest($instance, $path, 'DELETE');
+        }
+    }
 
     proxyNodeRequest($instance, $path, 'GET');
 }
@@ -205,6 +261,153 @@ if (isset($_GET['ajax_schedule_delete']) && $_SERVER['REQUEST_METHOD'] === 'POST
     }
     $path = "/api/scheduled/{$instanceId}/" . rawurlencode($scheduledId);
     proxyNodeRequest($instance, $path, 'DELETE');
+}
+
+if (isset($_GET['ajax_schedule_create']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $path = "/api/scheduled/{$instanceId}";
+    $body = file_get_contents('php://input');
+    proxyNodeRequest($instance, $path, 'POST', $body);
+}
+
+function openChatDbOrFail() {
+    $dbPath = __DIR__ . '/chat_data.db';
+    if (!file_exists($dbPath)) {
+        respondJson(['ok' => false, 'error' => 'Banco de dados indisponível'], 500);
+    }
+    return new SQLite3($dbPath, SQLITE3_OPEN_READWRITE);
+}
+
+if (!function_exists('sqliteTableExists')) {
+    function sqliteTableExists($db, string $table): bool {
+        $stmt = $db->prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = :name");
+        $stmt->bindValue(':name', $table, SQLITE3_TEXT);
+        $row = $stmt->execute()->fetchArray(SQLITE3_ASSOC);
+        return !empty($row['name']);
+    }
+}
+
+if (isset($_GET['ajax_variables'])) {
+    $remote = trim((string)($_GET['remote'] ?? ''));
+    if ($remote === '') {
+        respondJson(['ok' => false, 'error' => 'Remote JID é obrigatório'], 400);
+    }
+
+    $db = openChatDbOrFail();
+    $persistent = [];
+    $context = [];
+    $tags = [];
+
+    if (sqliteTableExists($db, 'persistent_variables')) {
+        $stmt = $db->prepare("
+            SELECT key, value, updated_at
+            FROM persistent_variables
+            WHERE instance_id = :instance
+            ORDER BY key ASC
+        ");
+        $stmt->bindValue(':instance', $instanceId, SQLITE3_TEXT);
+        $result = $stmt->execute();
+        while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+            $persistent[] = $row;
+        }
+    }
+
+    if (sqliteTableExists($db, 'contact_context')) {
+        $stmt = $db->prepare("
+            SELECT key, value, updated_at
+            FROM contact_context
+            WHERE instance_id = :instance AND remote_jid = :remote
+            ORDER BY key ASC
+        ");
+        $stmt->bindValue(':instance', $instanceId, SQLITE3_TEXT);
+        $stmt->bindValue(':remote', $remote, SQLITE3_TEXT);
+        $result = $stmt->execute();
+        while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+            $context[] = $row;
+        }
+    }
+
+    if (sqliteTableExists($db, 'scheduled_messages')) {
+        $stmt = $db->prepare("
+            SELECT tag, COUNT(*) AS total
+            FROM scheduled_messages
+            WHERE instance_id = :instance AND remote_jid = :remote
+            GROUP BY tag
+            ORDER BY tag ASC
+        ");
+        $stmt->bindValue(':instance', $instanceId, SQLITE3_TEXT);
+        $stmt->bindValue(':remote', $remote, SQLITE3_TEXT);
+        $result = $stmt->execute();
+        while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+            $tags[] = $row;
+        }
+    }
+
+    $db->close();
+    respondJson([
+        'ok' => true,
+        'persistent' => $persistent,
+        'context' => $context,
+        'tags' => $tags
+    ]);
+}
+
+if (isset($_GET['ajax_variables_delete']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $payload = json_decode(file_get_contents('php://input'), true);
+    if (!is_array($payload)) {
+        $payload = $_POST;
+    }
+    $scope = strtolower(trim((string)($payload['scope'] ?? '')));
+    $key = trim((string)($payload['key'] ?? ''));
+    $remote = trim((string)($payload['remote'] ?? ''));
+
+    if ($scope === '' || $key === '') {
+        respondJson(['ok' => false, 'error' => 'Escopo e chave são obrigatórios'], 400);
+    }
+
+    $db = openChatDbOrFail();
+    $changes = 0;
+
+    if ($scope === 'persistent' && sqliteTableExists($db, 'persistent_variables')) {
+        $stmt = $db->prepare("
+            DELETE FROM persistent_variables
+            WHERE instance_id = :instance AND key = :key
+        ");
+        $stmt->bindValue(':instance', $instanceId, SQLITE3_TEXT);
+        $stmt->bindValue(':key', $key, SQLITE3_TEXT);
+        $stmt->execute();
+        $changes = $db->changes();
+    } elseif ($scope === 'context' && sqliteTableExists($db, 'contact_context')) {
+        if ($remote === '') {
+            $db->close();
+            respondJson(['ok' => false, 'error' => 'Remote JID é obrigatório'], 400);
+        }
+        $stmt = $db->prepare("
+            DELETE FROM contact_context
+            WHERE instance_id = :instance AND remote_jid = :remote AND key = :key
+        ");
+        $stmt->bindValue(':instance', $instanceId, SQLITE3_TEXT);
+        $stmt->bindValue(':remote', $remote, SQLITE3_TEXT);
+        $stmt->bindValue(':key', $key, SQLITE3_TEXT);
+        $stmt->execute();
+        $changes = $db->changes();
+    } elseif ($scope === 'tag' && sqliteTableExists($db, 'scheduled_messages')) {
+        if ($remote === '') {
+            $db->close();
+            respondJson(['ok' => false, 'error' => 'Remote JID é obrigatório'], 400);
+        }
+        $stmt = $db->prepare("
+            DELETE FROM scheduled_messages
+            WHERE instance_id = :instance AND remote_jid = :remote AND tag = :tag
+        ");
+        $stmt->bindValue(':instance', $instanceId, SQLITE3_TEXT);
+        $stmt->bindValue(':remote', $remote, SQLITE3_TEXT);
+        $stmt->bindValue(':tag', $key, SQLITE3_TEXT);
+        $stmt->execute();
+        $changes = $db->changes();
+    }
+
+    $db->close();
+    respondJson(['ok' => true, 'deleted' => $changes]);
 }
 
 if (isset($_GET['ajax_health'])) {
@@ -382,6 +585,22 @@ if (isset($_GET['ajax_send']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
       0%, 100% { opacity: 0.4; }
       50% { opacity: 1; }
     }
+    .instance-sticky-header {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      background: rgba(241, 245, 249, 0.96);
+      border: 1px solid #e2e8f0;
+      border-radius: 16px;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+      backdrop-filter: blur(8px);
+      margin-bottom: 16px;
+    }
   </style>
 </head>
 
@@ -391,9 +610,9 @@ if (isset($_GET['ajax_send']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
   <!-- SIDEBAR / INSTÂNCIAS (PRESERVED FROM ORIGINAL) -->
   <aside class="w-80 bg-white border-r border-mid hidden lg:flex flex-col h-screen overflow-hidden">
     <div class="p-6 border-b border-mid">
-    <a href="/api/envio/wpp/" class="flex items-center gap-3 inline-flex group">
+    <a href="<?= htmlspecialchars($dashboardBaseUrl) ?>" class="flex items-center gap-3 inline-flex group">
         <div class="flex items-center justify-center h-12">
-          <img src="assets/maestro-logo.png" width="56" style="height:auto;" alt="Logomarca Maestro">
+          <img src="<?= htmlspecialchars($dashboardLogoUrl) ?>" width="56" style="height:auto;" alt="Logomarca Maestro">
         </div>
         <div>
           <div class="text-lg font-semibold text-dark">Maestro</div>
@@ -408,6 +627,9 @@ if (isset($_GET['ajax_send']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
       <a href="/api/envio/wpp/?instance=<?= urlencode($instanceId) ?>" class="mt-4 w-full px-4 py-2 rounded-xl bg-mid text-dark font-medium hover:bg-primary hover:text-white transition text-center block">
         ← Voltar ao Painel
       </a>
+      <button id="newConversationBtn" class="mt-3 w-full px-4 py-2 rounded-xl border border-primary text-xs text-primary font-medium hover:bg-primary/10">
+        + Nova conversa
+      </button>
     </div>
 
     <!-- CHAT CONTACTS SIDEBAR -->
@@ -447,11 +669,15 @@ if (isset($_GET['ajax_send']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
   <!-- CHAT MAIN AREA -->
   <main class="chat-main p-8 flex-1 flex flex-col h-screen overflow-hidden">
+    <div class="instance-sticky-header">
+      <div class="text-sm text-slate-500">Instância selecionada</div>
+      <div class="font-semibold text-dark"><?= htmlspecialchars($instance['name'] ?? 'Nenhuma instância') ?></div>
+    </div>
     <div class="flex flex-col flex-1 min-h-0 relative">
     <!-- CHAT HEADER -->
     <div class="bg-white border border-mid rounded-2xl p-4 mb-6 flex items-center justify-between">
       <div class="flex items-center gap-3">
-        <div class="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-white font-medium">
+        <div id="chatContactAvatar" class="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-white font-medium overflow-hidden">
           <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
             <path fill-rule="evenodd" d="M18 10c0 3.866-3.582 7-8 7a8.841 8.841 0 01-4.083-.98L2 17l1.338-3.123C2.493 12.767 2 11.434 2 10c0-3.866 3.582-7 8-7s8 3.134 8 7zM7 9H5v2h2V9zm8 0h-2v2h2V9zM9 9h2v2H9V9z" clip-rule="evenodd"></path>
           </svg>
@@ -491,11 +717,8 @@ if (isset($_GET['ajax_send']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
             <button id="deleteChatBtn" disabled class="px-3 py-1 rounded-xl border border-error text-xs text-error hover:bg-error/10">
               Apagar conversa
             </button>
-            <button id="newConversationBtn" class="px-3 py-1 rounded-xl border border-primary text-xs text-primary hover:bg-primary/10">
-              + Nova conversa
-            </button>
             <button id="toggleAgBtn" class="px-3 py-1.5 rounded-lg border border-mid bg-white hover:bg-slate-50 text-sm flex items-center gap-2">
-              <span id="toggleAgBtnText">Ver agendamentos</span>
+              <span id="toggleAgBtnText">Agendamentos</span>
               <span id="scheduleBadge" class="hidden text-[11px] font-semibold gap-1 flex items-center"></span>
             </button>
           </div>
@@ -537,14 +760,51 @@ if (isset($_GET['ajax_send']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
       </div>
       <div class="max-h-[60vh] overflow-y-auto p-4">
         <div id="scheduledPanel" class="hidden space-y-3">
-          <div class="flex items-center justify-between">
-            <div>
-              <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Agendamentos</p>
-              <p id="scheduledSummary" class="text-[11px] text-slate-400">Sem agendamentos para este contato.</p>
+          <div class="flex flex-col gap-3">
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Agendamentos</p>
+                <p id="scheduledSummary" class="text-[11px] text-slate-400">Sem agendamentos para este contato.</p>
+              </div>
+              <div class="flex items-center gap-2">
+                <button id="toggleScheduleForm" type="button"
+                        class="text-xs text-primary border border-primary/60 rounded-full px-3 py-1 hover:bg-primary/5 transition">
+                  + Agendar
+                </button>
+                <button id="refreshScheduleBtn" class="text-xs text-primary border border-primary/60 rounded-full px-3 py-1 hover:bg-primary/5 transition">
+                  Atualizar
+                </button>
+              </div>
             </div>
-            <button id="refreshScheduleBtn" class="text-xs text-primary border border-primary/60 rounded-full px-3 py-1 hover:bg-primary/5 transition">
-              Atualizar
-            </button>
+            <div id="scheduleFormContainer" class="hidden space-y-3 rounded-2xl border border-dashed border-mid bg-slate-50 p-4 text-sm">
+              <form id="manualScheduleForm" class="space-y-3">
+                <div>
+                  <label class="text-xs text-slate-500">Mensagem</label>
+                  <textarea id="manualScheduleMessage" rows="3"
+                            class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-white text-sm"
+                            placeholder="Mensagem a ser enviada para o cliente"></textarea>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <label class="text-xs text-slate-500">Data</label>
+                    <input id="manualScheduleDate" type="date"
+                           class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-white text-sm">
+                  </div>
+                  <div>
+                    <label class="text-xs text-slate-500">Hora</label>
+                    <input id="manualScheduleTime" type="time"
+                           class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-white text-sm">
+                  </div>
+                </div>
+                <div class="flex items-center gap-3">
+                  <button type="submit"
+                          class="px-4 py-2 rounded-xl bg-primary text-white text-xs font-medium hover:opacity-90">
+                    Agendar manualmente
+                  </button>
+                  <span id="manualScheduleStatus" class="text-[11px] text-slate-500"></span>
+                </div>
+              </form>
+            </div>
           </div>
           <div id="scheduledList" class="space-y-2 text-sm text-slate-500"></div>
         </div>
@@ -565,6 +825,16 @@ if (isset($_GET['ajax_send']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
     <h3 class="text-lg font-semibold mb-3">Detalhes da conversa</h3>
     <div id="contactDetailsBody" class="space-y-2 text-sm text-slate-600">
       <p>Selecione uma conversa para ver os detalhes.</p>
+    </div>
+    <div class="mt-4 border-t border-mid pt-3 flex items-center justify-between">
+      <div>
+        <div class="text-sm font-semibold text-slate-700">Variaveis</div>
+        <div class="text-[11px] text-slate-500">Persistentes da instância + contexto do contato e tags.</div>
+      </div>
+      <button id="manageVariablesBtn" type="button"
+              class="px-3 py-1 rounded-xl border border-mid text-xs text-slate-600 hover:border-primary hover:text-primary">
+        Ver
+      </button>
     </div>
   </div>
 </div>
@@ -592,6 +862,23 @@ if (isset($_GET['ajax_send']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
   </div>
 </div>
 
+<div id="variablesModal" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50 px-4">
+  <div class="bg-white rounded-2xl w-full max-w-2xl p-6 relative border border-mid">
+    <button id="variablesClose" class="absolute top-3 right-3 text-slate-500 hover:text-dark">&times;</button>
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-lg font-semibold">Variaveis, Contexto e Tags</h3>
+      <button id="variablesRefresh" type="button"
+              class="px-3 py-1 rounded-xl border border-mid text-xs text-slate-600 hover:border-primary hover:text-primary">
+        Atualizar
+      </button>
+    </div>
+    <div id="variablesStatus" class="text-[11px] text-slate-500 mb-3"></div>
+    <div id="variablesBody" class="space-y-4 text-sm text-slate-600">
+      <p>Selecione uma conversa para ver os dados.</p>
+    </div>
+  </div>
+</div>
+
 <script>
 const INSTANCE_ID = '<?= $instanceId ?>';
 const API_BASE_URL = `${window.location.origin}${window.location.pathname}`;
@@ -604,11 +891,32 @@ let messages = {};
 let isLoading = false;
 const timeOptions = { hour: '2-digit', minute: '2-digit', timeZone: 'America/Fortaleza' };
 const dateTimeOptions = { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Fortaleza' };
+function normalizeTimestamp(value) {
+    if (!value) return value;
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(trimmed)) {
+            return `${trimmed.replace(' ', 'T')}Z`;
+        }
+    }
+    return value;
+}
+
+function toDate(value) {
+    const normalized = normalizeTimestamp(value);
+    const date = new Date(normalized);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
 const encodeAttrValue = value => encodeURIComponent(value || '');
 const urlParams = new URLSearchParams(window.location.search);
 let pendingInitialContact = urlParams.get('contact') || null;
 const logPrefix = `[conversas ${INSTANCE_ID}]`;
 const CHAT_SCROLL_THRESHOLD = 48;
+const CONTACTS_PAGE_SIZE = 50;
+let contactsOffset = 0;
+let contactsHasMore = true;
+let contactsLoading = false;
+let contactsLoadingRow = null;
 const scheduleTimeOptions = {
     hour: '2-digit',
     minute: '2-digit',
@@ -646,6 +954,7 @@ const scheduleBadge = document.getElementById('scheduleBadge');
 // UI Elements
 const contactsList = document.getElementById('contactsList');
 const messagesArea = document.getElementById('messagesArea');
+const chatContactAvatar = document.getElementById('chatContactAvatar');
 const searchInput = document.getElementById('searchInput');
 const messageInput = document.getElementById('messageInput');
 const messageForm = document.getElementById('messageForm');
@@ -665,6 +974,12 @@ const clearChatBtn = document.getElementById('clearChatBtn');
 const deleteChatBtn = document.getElementById('deleteChatBtn');
 const newConversationBtn = document.getElementById('newConversationBtn');
 const newConversationModal = document.getElementById('newConversationModal');
+const variablesModal = document.getElementById('variablesModal');
+const variablesBody = document.getElementById('variablesBody');
+const variablesStatus = document.getElementById('variablesStatus');
+const variablesClose = document.getElementById('variablesClose');
+const variablesRefresh = document.getElementById('variablesRefresh');
+const manageVariablesBtn = document.getElementById('manageVariablesBtn');
 const newConversationClose = document.getElementById('newConversationClose');
 const newConversationCancel = document.getElementById('newConversationCancel');
 const newConversationForm = document.getElementById('newConversationForm');
@@ -674,12 +989,21 @@ const newConversationStatus = document.getElementById('newConversationStatus');
 const scheduledPanel = document.getElementById('scheduledPanel');
 const scheduledList = document.getElementById('scheduledList');
 const scheduledSummary = document.getElementById('scheduledSummary');
+const toggleScheduleFormBtn = document.getElementById('toggleScheduleForm');
+const scheduleFormContainer = document.getElementById('scheduleFormContainer');
+const manualScheduleForm = document.getElementById('manualScheduleForm');
+const manualScheduleMessage = document.getElementById('manualScheduleMessage');
+const manualScheduleDate = document.getElementById('manualScheduleDate');
+const manualScheduleTime = document.getElementById('manualScheduleTime');
+const manualScheduleStatus = document.getElementById('manualScheduleStatus');
 const debugConversationId = document.getElementById('debugConversationId');
 const debugScheduledHint = document.getElementById('debugScheduledHint');
 const refreshScheduleBtn = document.getElementById('refreshScheduleBtn');
 const statusBroadcastAlert = document.getElementById('statusBroadcastAlert');
 const statusBroadcastText = document.getElementById('statusBroadcastText');
 const statusBroadcastClose = document.getElementById('statusBroadcastClose');
+const EXPORT_LINK_MARKUP = '<a href="#" data-export-log class="text-primary font-semibold hover:underline">Salvar log</a>';
+let exportEnabled = false;
 
 function updateScheduleBadge(pendingCount = 0, sentCount = 0) {
     if (!scheduleBadge) {
@@ -742,7 +1066,8 @@ function renderStatusBroadcastAlert(notification) {
     }
     const snippet = (notification.content || '').trim();
     const displaySnippet = snippet.length > 120 ? `${snippet.slice(0, 117)}...` : snippet || 'Nova atualização de status';
-    const timestamp = notification.timestamp ? (new Date(notification.timestamp)).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Fortaleza' }) : '';
+    const notificationDate = toDate(notification.timestamp);
+    const timestamp = notificationDate ? notificationDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Fortaleza' }) : '';
     statusBroadcastText.textContent = `Mensagem ${timestamp ? `(${timestamp}) ` : ''}do status ignorada: ${displaySnippet}`;
     statusBroadcastAlert.classList.remove('hidden');
 }
@@ -810,28 +1135,79 @@ function startMultiInputPolling() {
 }
 
 // Utility helpers
+const SPECIAL_REMOTE_DOMAINS = new Set(['g.us', 'broadcast', 'status@broadcast', 'lid']);
+
+function ensureBrazilCountryCodeForDisplay(value) {
+  if (!value) return '';
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('55')) {
+    return digits;
+  }
+  if (digits.length >= 10 && digits.length <= 11) {
+    return `55${digits}`;
+  }
+  return digits;
+}
+
+function normalizeRemoteJidForDisplay(remoteJid) {
+  const normalized = String(remoteJid || '').trim();
+  if (!normalized) return '';
+  const [localPart = '', domainPart = ''] = normalized.split('@');
+  const lowerDomain = domainPart.toLowerCase();
+  if (lowerDomain && SPECIAL_REMOTE_DOMAINS.has(lowerDomain)) {
+    return `${localPart}@${lowerDomain}`;
+  }
+  const digits = (localPart || '').replace(/\D/g, '');
+  if (!digits) {
+    return remoteJid;
+  }
+  const normalizedDigits = ensureBrazilCountryCodeForDisplay(digits);
+  return `${normalizedDigits}@s.whatsapp.net`;
+}
+
+function resolveKnownRemoteJid(remoteJid) {
+  const normalized = String(remoteJid || '').trim();
+  if (!normalized) return '';
+  const direct = contacts.find(c => c.remote_jid === normalized);
+  if (direct) return normalized;
+  const [localPart = ''] = normalized.split('@');
+  const digits = localPart.replace(/\D/g, '');
+  if (!digits) return normalized;
+  const candidates = [
+    `${digits}@lid`,
+    `${digits}@s.whatsapp.net`
+  ];
+  for (const candidate of candidates) {
+    const match = contacts.find(c => c.remote_jid === candidate);
+    if (match) return candidate;
+  }
+  return normalized;
+}
+
 function formatRemoteJid(remoteJid) {
   if (!remoteJid) return 'Não definido';
-  const clean = (remoteJid.split('@')[0] || '').replace(/\D/g, '');
-  if (!clean) return remoteJid;
-  if (clean.startsWith('55') && clean.length > 6) {
-    const country = clean.slice(0, 2);
-    const area = clean.slice(2, 4);
-    const subscriber = clean.slice(4);
+  const digits = (remoteJid.split('@')[0] || '').replace(/\D/g, '');
+  const normalized = ensureBrazilCountryCodeForDisplay(digits);
+  if (!normalized) return remoteJid;
+  if (normalized.startsWith('55') && normalized.length > 6) {
+    const country = normalized.slice(0, 2);
+    const area = normalized.slice(2, 4);
+    const subscriber = normalized.slice(4);
     const prefix = subscriber.slice(0, -4);
     const suffix = subscriber.slice(-4);
     const prefixPart = prefix ? `${prefix}-` : '';
     return `${country} ${area} ${prefixPart}${suffix}`;
   }
-  const formatted = clean.replace(/^(\d{2})(\d{4,5})(\d{4})$/, '$1 $2-$3');
-  return formatted || clean;
+  const formatted = normalized.replace(/^(\d{2})(\d{4,5})(\d{4})$/, '$1 $2-$3');
+  return formatted || normalized;
 }
 
 function getContactStatusLabel(contact) {
   if (!contact) return 'Não definido';
   const status = (contact.status_name || '').trim();
   if (status) return status;
-  return formatRemoteJid(contact.remote_jid);
+  return formatRemoteJid(contact.display_remote_jid || contact.remote_jid);
 }
 
 function formatScheduledTime(value) {
@@ -847,6 +1223,7 @@ async function loadScheduledList(remoteJid) {
   if (!remoteJid || !scheduledPanel) {
     scheduledPanel?.classList.add('hidden');
     updateScheduleBadge(0, 0);
+    showScheduleForm(false);
     return;
   }
   scheduledPanel.classList.remove('hidden');
@@ -868,13 +1245,92 @@ async function loadScheduledList(remoteJid) {
   }
 }
 
+function setScheduleFormDefaults() {
+  if (!manualScheduleDate || !manualScheduleTime) return;
+  const now = new Date();
+  const future = new Date(now.getTime() + 5 * 60 * 1000);
+  const pad = (value) => String(value).padStart(2, '0');
+  manualScheduleDate.value = `${future.getFullYear()}-${pad(future.getMonth() + 1)}-${pad(future.getDate())}`;
+  manualScheduleTime.value = `${pad(future.getHours())}:${pad(future.getMinutes())}`;
+  if (manualScheduleStatus) {
+    manualScheduleStatus.textContent = '';
+  }
+}
+
+function showScheduleForm(show) {
+  if (!scheduleFormContainer || !toggleScheduleFormBtn) return;
+  const shouldShow = Boolean(show);
+  scheduleFormContainer.classList.toggle('hidden', !shouldShow);
+  toggleScheduleFormBtn.textContent = shouldShow ? 'Fechar' : '+ Agendar';
+  if (shouldShow) {
+    setScheduleFormDefaults();
+  } else if (manualScheduleStatus) {
+    manualScheduleStatus.textContent = '';
+  }
+}
+
+async function handleManualScheduleSubmit(event) {
+  event.preventDefault();
+  if (!selectedContact) {
+    if (manualScheduleStatus) {
+      manualScheduleStatus.textContent = 'Selecione uma conversa primeiro.';
+    }
+    return;
+  }
+  if (!manualScheduleMessage || !manualScheduleDate || !manualScheduleTime) return;
+  const message = manualScheduleMessage.value.trim();
+  const date = manualScheduleDate.value;
+  const time = manualScheduleTime.value;
+  if (!message || !date || !time) {
+    if (manualScheduleStatus) {
+      manualScheduleStatus.textContent = 'Informe mensagem, data e hora.';
+    }
+    return;
+  }
+  const scheduledAt = new Date(`${date}T${time}:00`);
+  if (Number.isNaN(scheduledAt.getTime())) {
+    if (manualScheduleStatus) {
+      manualScheduleStatus.textContent = 'Data/hora inválidas.';
+    }
+    return;
+  }
+  if (manualScheduleStatus) {
+    manualScheduleStatus.textContent = 'Agendando...';
+  }
+  try {
+    const payload = {
+      remote_jid: selectedContact,
+      message,
+      scheduled_at: scheduledAt.toISOString()
+    };
+    const response = await fetchWithCreds(buildAjaxUrl({ ajax_schedule_create: '1' }), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    if (!response.ok || !data?.ok) {
+      throw new Error(data?.error || 'Falha ao criar agendamento');
+    }
+    if (manualScheduleStatus) {
+      manualScheduleStatus.textContent = 'Agendamento criado!';
+    }
+    manualScheduleMessage.value = '';
+    showScheduleForm(false);
+    loadScheduledList(selectedContact);
+  } catch (error) {
+    console.error(logPrefix, 'manual schedule error', error);
+    if (manualScheduleStatus) {
+      manualScheduleStatus.textContent = `Erro: ${error.message}`;
+    }
+  }
+}
+
 function renderScheduledList(rows) {
   if (!rows || !rows.length) {
     scheduledList.innerHTML = '<div class="text-xs text-slate-400">Nenhum agendamento encontrado.</div>';
     scheduledSummary.textContent = 'Sem agendamentos para este contato.';
-    if (debugScheduledHint) {
-      debugScheduledHint.textContent = '';
-    }
+    renderDebugScheduledHint('Sem agendamentos para este contato.');
     updateScheduleBadge(0, 0);
     return;
   }
@@ -882,9 +1338,7 @@ function renderScheduledList(rows) {
   const sentCount = rows.filter(row => row.status === 'sent').length;
   updateScheduleBadge(pendingCount, sentCount);
   scheduledSummary.textContent = `${rows.length} agendamento${rows.length > 1 ? 's' : ''} pendente${rows.length > 1 ? 's' : ''}.`;
-  if (debugScheduledHint) {
-    debugScheduledHint.textContent = `${rows.length} agendamento${rows.length > 1 ? 's' : ''} pendente${rows.length > 1 ? 's' : ''}.`;
-  }
+  renderDebugScheduledHint(`${rows.length} agendamento${rows.length > 1 ? 's' : ''} pendente${rows.length > 1 ? 's' : ''}.`);
   scheduledList.innerHTML = rows.map(row => {
     const statusBadge = row.status === 'sent' ? 'text-success' : row.status === 'failed' ? 'text-error' : 'text-slate-500';
     const scheduledAt = formatScheduledTime(row.scheduled_at);
@@ -902,6 +1356,18 @@ function renderScheduledList(rows) {
       </div>
     `;
   }).join('');
+}
+
+function renderDebugScheduledHint(message) {
+    if (!debugScheduledHint) return;
+    const trimmed = (message || '').trim();
+    if (!trimmed) {
+        debugScheduledHint.innerHTML = '';
+        return;
+    }
+    const safeText = escapeHtml(trimmed);
+    const link = exportEnabled ? ` ${EXPORT_LINK_MARKUP}` : '';
+    debugScheduledHint.innerHTML = `${safeText}${link}`;
 }
 
 async function deleteSchedule(id) {
@@ -927,17 +1393,66 @@ async function deleteSchedule(id) {
 // ===== API FUNCTIONS =====
 
 // Load contacts from API
-async function loadContacts() {
-    console.log(logPrefix, 'loadContacts');
+function mergeContacts(existing, incoming) {
+    const known = new Set(existing.map(contact => contact.remote_jid));
+    const merged = [...existing];
+    incoming.forEach(contact => {
+        if (!known.has(contact.remote_jid)) {
+            merged.push(contact);
+            known.add(contact.remote_jid);
+        }
+    });
+    return merged;
+}
+
+function setContactsLoadingIndicator(visible) {
+    if (!contactsList) return;
+    if (!contactsLoadingRow) {
+        contactsLoadingRow = document.createElement('div');
+        contactsLoadingRow.id = 'contactsLoadingRow';
+        contactsLoadingRow.className = 'p-3 text-center text-xs text-slate-400';
+        contactsLoadingRow.textContent = 'Carregando mais conversas...';
+    }
+    if (visible) {
+        if (!contactsList.contains(contactsLoadingRow)) {
+            contactsList.appendChild(contactsLoadingRow);
+        }
+    } else if (contactsLoadingRow.parentNode) {
+        contactsLoadingRow.parentNode.removeChild(contactsLoadingRow);
+    }
+}
+
+async function loadContacts(options = {}) {
+    const { reset = false } = options;
+    if (contactsLoading) return;
+    if (!contactsHasMore && !reset) return;
+    console.log(logPrefix, 'loadContacts', { reset, offset: contactsOffset });
+    contactsLoading = true;
+    setContactsLoadingIndicator(true);
     try {
-        const response = await fetchWithCreds(buildAjaxUrl({ ajax_chats: '1' }));
+        if (reset) {
+            contactsOffset = 0;
+            contactsHasMore = true;
+            contacts = [];
+        }
+        const response = await fetchWithCreds(buildAjaxUrl({ ajax_chats: '1', limit: String(CONTACTS_PAGE_SIZE), offset: String(contactsOffset) }));
         const data = await response.json();
         
         if (data.ok) {
-            contacts = data.chats;
-            console.log(logPrefix, 'loadContacts success', { count: contacts.length });
+            const batch = data.chats.map(contact => {
+                const normalizedRemote = normalizeRemoteJidForDisplay(contact.remote_jid || '');
+                return {
+                    ...contact,
+                    display_remote_jid: normalizedRemote || (contact.remote_jid || '')
+                };
+            });
+            contacts = reset ? batch : mergeContacts(contacts, batch);
+            contactsOffset += batch.length;
+            contactsHasMore = batch.length === CONTACTS_PAGE_SIZE;
+            console.log(logPrefix, 'loadContacts success', { total: contacts.length, batch: batch.length, hasMore: contactsHasMore });
             renderContacts();
-            if (pendingInitialContact) {
+            setContactsLoadingIndicator(contactsHasMore);
+            if (reset && pendingInitialContact) {
                 selectContactByRemote(pendingInitialContact);
                 pendingInitialContact = null;
             }
@@ -947,6 +1462,11 @@ async function loadContacts() {
     } catch (error) {
         console.error(logPrefix, 'Error loading contacts:', error);
         contactsList.innerHTML = '<div class="p-4 text-center text-error">Erro ao carregar conversas</div>';
+    } finally {
+        contactsLoading = false;
+        if (!contactsHasMore) {
+            setContactsLoadingIndicator(false);
+        }
     }
 }
 
@@ -957,11 +1477,25 @@ async function loadMessages(remoteJid) {
         isLoading = true;
         chatStatus.textContent = 'Carregando mensagens...';
         
-        const response = await fetchWithCreds(buildAjaxUrl({ ajax_messages: '1', remote: remoteJid }));
+        const response = await fetchWithCreds(buildAjaxUrl({ ajax_messages: '1', remote: remoteJid, limit: '0' }));
         const data = await response.json();
         
         if (data.ok) {
             messages[remoteJid] = data.messages;
+            if (data.contact_meta) {
+                const mergedMeta = {
+                    ...(selectedContactData || {}),
+                    ...data.contact_meta,
+                    remote_jid: remoteJid
+                };
+                selectedContactData = mergedMeta;
+                const contactIndex = contacts.findIndex(c => c.remote_jid === remoteJid);
+                if (contactIndex >= 0) {
+                    contacts[contactIndex] = { ...contacts[contactIndex], ...data.contact_meta };
+                    renderContacts();
+                }
+                renderChatHeaderAvatar(mergedMeta);
+            }
             console.log(logPrefix, 'loadMessages success', { remote: remoteJid, count: data.messages.length });
             renderMessages(remoteJid);
             chatStatus.textContent = `${data.messages.length} mensagens`;
@@ -1018,8 +1552,8 @@ function renderContacts() {
         );
     });
     filteredContacts.sort((a, b) => {
-        const ta = new Date(a.last_timestamp).getTime();
-        const tb = new Date(b.last_timestamp).getTime();
+        const ta = toDate(a.last_timestamp)?.getTime() ?? 0;
+        const tb = toDate(b.last_timestamp)?.getTime() ?? 0;
         return tb - ta;
     });
     
@@ -1033,8 +1567,10 @@ function renderContacts() {
     filteredContacts.forEach(contact => {
         const lastMessage = contact.last_message || 'Nenhuma mensagem';
         const lastRole = contact.last_role === 'user' ? 'Você: ' : 'IA: ';
-        const time = contact.last_timestamp ? new Date(contact.last_timestamp).toLocaleTimeString('pt-BR', timeOptions) : '--:--';
+        const contactDate = toDate(contact.last_timestamp);
+        const time = contactDate ? contactDate.toLocaleTimeString('pt-BR', timeOptions) : '--:--';
         const statusLabel = getContactStatusLabel(contact);
+        const statusNote = (contact.status_name || '').trim();
         const attrRemote = encodeAttrValue(contact.remote_jid);
         const attrLabel = encodeAttrValue(statusLabel);
         const contactName = (contact.contact_name || '').trim();
@@ -1046,12 +1582,18 @@ function renderContacts() {
         item.className = `contact-item w-full text-left p-4 cursor-pointer ${selectedContact === contact.remote_jid ? 'active' : ''}`;
         item.dataset.remote = attrRemote;
         item.dataset.label = attrLabel;
+        if (statusNote) {
+            item.title = `Recado: ${statusNote}`;
+        }
 
         const wrapper = document.createElement('div');
         wrapper.className = 'flex items-center gap-3';
 
         const avatar = document.createElement('div');
         avatar.className = 'w-10 h-10 rounded-full bg-primary flex items-center justify-center text-white font-medium overflow-hidden';
+        if (statusNote) {
+            avatar.title = `Recado: ${statusNote}`;
+        }
         if (contact.profile_picture) {
             const img = document.createElement('img');
             img.src = contact.profile_picture;
@@ -1101,14 +1643,32 @@ function selectContactByRemote(remoteJid) {
         console.log(logPrefix, 'selectContactByRemote skipped status broadcast', remoteJid);
         return;
     }
-    const contact = contacts.find(c => c.remote_jid === remoteJid);
+    const resolved = resolveKnownRemoteJid(remoteJid);
+    const contact = contacts.find(c => c.remote_jid === resolved);
     if (!contact) return;
     const label = getContactStatusLabel(contact);
-    console.log(logPrefix, 'selectContactByRemote', { remote: remoteJid, label });
+    console.log(logPrefix, 'selectContactByRemote', { remote: resolved, label });
     setTimeout(() => {
-        const element = contactsList.querySelector(`[data-remote="${encodeAttrValue(remoteJid)}"]`);
-        selectContact(encodeAttrValue(remoteJid), encodeAttrValue(label), element);
+        const element = contactsList.querySelector(`[data-remote="${encodeAttrValue(resolved)}"]`);
+        selectContact(encodeAttrValue(resolved), encodeAttrValue(label), element);
     }, 0);
+}
+
+function renderChatHeaderAvatar(meta) {
+    if (!chatContactAvatar) return;
+    const statusLabel = getContactStatusLabel(meta || {});
+    const statusNote = (meta?.status_name || '').trim();
+    if (statusNote) {
+        chatContactAvatar.title = `Recado: ${statusNote}`;
+    } else {
+        chatContactAvatar.removeAttribute('title');
+    }
+    if (meta?.profile_picture) {
+        chatContactAvatar.innerHTML = `<img src="${escapeHtml(meta.profile_picture)}" alt="${escapeHtml(statusLabel)}" class="w-full h-full object-cover">`;
+        return;
+    }
+    const initial = statusLabel.charAt(0).toUpperCase() || '';
+    chatContactAvatar.textContent = initial;
 }
 
 // Render messages for selected contact
@@ -1116,8 +1676,8 @@ function renderMessages(remoteJid) {
     const currentMessages = messages[remoteJid] || [];
     console.log(logPrefix, 'renderMessages', { remote: remoteJid, count: currentMessages.length });
     const contactMessages = [...currentMessages].sort((a, b) => {
-        const ta = new Date(a.timestamp).getTime();
-        const tb = new Date(b.timestamp).getTime();
+        const ta = toDate(a.timestamp)?.getTime() ?? 0;
+        const tb = toDate(b.timestamp)?.getTime() ?? 0;
         return ta - tb;
     });
     
@@ -1146,11 +1706,12 @@ function renderMessages(remoteJid) {
         const isDebug = metadata?.debug === true;
         const isErrorMessage = metadata?.severity === 'error';
         const errorText = metadata?.error;
-        const time = new Date(msg.timestamp).toLocaleTimeString('pt-BR', { 
+        const msgDate = toDate(msg.timestamp);
+        const time = msgDate ? msgDate.toLocaleTimeString('pt-BR', { 
             hour: '2-digit', 
             minute: '2-digit',
             timeZone: 'America/Fortaleza'
-        });
+        }) : '--:--';
         const errorDetails = errorText ? `<div class="text-[10px] ${isErrorMessage ? 'text-error' : 'text-slate-500'} mt-1">Erro: ${escapeHtml(errorText)}</div>` : '';
         
         const commandLines = metadata?.commands || [];
@@ -1161,10 +1722,13 @@ function renderMessages(remoteJid) {
                 ${commandLines.map(cmd => {
                     const argsText = (cmd.args || []).map(arg => escapeHtml(String(arg || ''))).filter(Boolean).join(', ');
                     const displayArgs = argsText || 'sem argumentos';
+                    const resultText = formatCommandResultRaw(cmd);
+                    const resultLine = resultText ? `<div class="text-[11px] text-orange-800/80 mt-1">Retorno: ${escapeHtml(resultText)}</div>` : '';
                     return `
                     <div class="px-3 py-2 rounded-2xl border border-orange-200 bg-orange-50 text-[12px] text-orange-900">
                         Função <span class="font-semibold text-orange-800">${escapeHtml(cmd.type)}()</span>
                         <div class="text-[11px] text-orange-800/80 mt-1">Parâmetros: ${displayArgs}</div>
+                        ${resultLine}
                     </div>
                     `;
                 }).join('')}
@@ -1198,25 +1762,32 @@ function renderMessages(remoteJid) {
     } else {
         messagesArea.scrollTop = Math.min(previousScrollTop, maxScrollTop);
     }
+    updateChatActions(Boolean(selectedContact));
 }
 
 function updateChatActions(active) {
     [contactDetailsBtn, clearChatBtn, deleteChatBtn].forEach(btn => {
         if (btn) btn.disabled = !active;
     });
+    const hasMessages = active && selectedContact && Array.isArray(messages[selectedContact]) && messages[selectedContact].length > 0;
+    setExportControls(hasMessages);
+}
+
+function setExportControls(enabled) {
+    exportEnabled = Boolean(enabled);
 }
 
 function formatTimestamp(value) {
     if (!value) return '';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return '';
+    const date = toDate(value);
+    if (!date) return '';
     return date.toLocaleTimeString('pt-BR', timeOptions);
 }
 
 function formatDateTime(value) {
     if (!value) return '';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return '';
+    const date = toDate(value);
+    if (!date) return '';
     return date.toLocaleString('pt-BR', dateTimeOptions);
 }
 
@@ -1228,6 +1799,9 @@ function formatCommandResult(cmd) {
         const status = cmd.result.status || 'sem status';
         const info = cmd.result.assinatura_info ? ` • ${cmd.result.assinatura_info}` : '';
         return `${type} → ${name} está ${status}${info}`;
+    }
+    if (type === 'mail') {
+        return formatCommandResultRaw(cmd) || `${type} → email processado`;
     }
     if (type === 'agendar') {
         const when = formatDateTime(cmd.result.scheduledAt || cmd.result.scheduled_at || cmd.result.scheduledAt || cmd.result.scheduled_at);
@@ -1243,19 +1817,146 @@ function formatCommandResult(cmd) {
     }
 }
 
+function formatCommandResultRaw(cmd) {
+    if (!cmd || cmd.result === undefined || cmd.result === null) return null;
+    if (typeof cmd.result === 'string') {
+        return cmd.result;
+    }
+    try {
+        return JSON.stringify(cmd.result);
+    } catch {
+        return String(cmd.result);
+    }
+}
+
+function buildConversationDump(remoteJid) {
+    if (!remoteJid) return null;
+    const storedMessages = Array.isArray(messages[remoteJid]) ? [...messages[remoteJid]] : [];
+    if (!storedMessages.length) {
+        return null;
+    }
+    const sortedMessages = storedMessages.sort((a, b) => {
+        const ta = toDate(a.timestamp)?.getTime() ?? 0;
+        const tb = toDate(b.timestamp)?.getTime() ?? 0;
+        return ta - tb;
+    });
+    const contactLabel = (selectedContactData?.status_name || selectedContactData?.contact_name || formatRemoteJid(remoteJid) || remoteJid).trim();
+    const contactMeta = selectedContactData || contacts.find(c => c.remote_jid === remoteJid) || {};
+    const contactMetaLines = [
+        ['Nome do contato', contactMeta.contact_name],
+        ['Status name', contactMeta.status_name],
+        ['Última mensagem', contactMeta.last_message],
+        ['Mensagem count', contactMeta.message_count],
+        ['Foto de perfil', contactMeta.profile_picture],
+        ['Data da última mensagem', formatDateTime(contactMeta.last_timestamp)]
+    ];
+    const lines = [
+        `Conversa exportada: ${new Date().toLocaleString('pt-BR', dateTimeOptions)}`,
+        `Instância: ${INSTANCE_ID}`,
+        `Contato: ${contactLabel}`,
+        `Remote JID: ${remoteJid}`
+    ];
+    contactMetaLines.forEach(([label, value]) => {
+        if (value !== undefined && value !== null && String(value).trim() !== '') {
+            lines.push(`${label}: ${String(value)}`);
+        }
+    });
+    lines.push(`Mensagens registradas: ${sortedMessages.length}`);
+    lines.push('---');
+
+    sortedMessages.forEach(msg => {
+        const timestamp = formatDateTime(msg.timestamp) || 'sem horário';
+        const direction = (msg.direction || (msg.role === 'assistant' ? 'outbound' : 'inbound'));
+        const directionLabel = direction === 'outbound' ? 'SAÍDA' : 'ENTRADA';
+        lines.push(`[${timestamp}] [${directionLabel}] ${msg.role || 'desconhecido'}`);
+        lines.push(msg.content || '');
+
+        const metadata = parseMetadata(msg.metadata);
+        const commandList = Array.isArray(metadata?.commands) ? metadata.commands : [];
+        if (commandList.length) {
+            lines.push('  Funções executadas:');
+            commandList.forEach(cmd => {
+                const argsText = (Array.isArray(cmd.args) ? cmd.args : [])
+                    .map(arg => (arg === undefined || arg === null) ? '' : String(arg))
+                    .map(arg => arg.trim())
+                    .filter(Boolean)
+                    .join(', ');
+                const argsLabel = argsText || 'sem argumentos';
+                const commandName = (cmd.type || 'função').trim();
+                lines.push(`    - ${commandName}(${argsLabel})`);
+                const resultText = formatCommandResult(cmd);
+                if (resultText) {
+                    lines.push(`      Retorno: ${resultText}`);
+                }
+            });
+        }
+
+        const metaNotes = [];
+        if (metadata) {
+            if (metadata.severity) metaNotes.push(`severity=${metadata.severity}`);
+            if (metadata.error) metaNotes.push(`error=${metadata.error}`);
+            if (metadata.debug) metaNotes.push(`debug=true`);
+        }
+        if (metaNotes.length) {
+            lines.push(`  Metadata: ${metaNotes.join(' | ')}`);
+        }
+
+        lines.push('');
+    });
+
+    return lines.join('\n');
+}
+
+function sanitizeForFilename(value) {
+    if (!value) return 'conversa';
+    return value.replace(/[^a-z0-9-_]/gi, '_').slice(0, 64);
+}
+
+function downloadConversationDump(content, remoteJid) {
+    if (!content) return;
+    const headerName = selectedContactData?.status_name || selectedContactData?.contact_name || remoteJid || 'conversa';
+    const filename = `conversa-${sanitizeForFilename(headerName)}-${Date.now()}.txt`;
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    setTimeout(() => {
+        URL.revokeObjectURL(link.href);
+        document.body.removeChild(link);
+    }, 200);
+}
+
+function handleExportConversation() {
+    if (!exportEnabled || !selectedContact) {
+        return false;
+    }
+    const dump = buildConversationDump(selectedContact);
+    if (!dump) {
+        chatStatus.textContent = 'Não há mensagens para exportar.';
+        return false;
+    }
+    downloadConversationDump(dump, selectedContact);
+    chatStatus.textContent = 'Exportação iniciada.';
+    return true;
+}
+
 async function openContactDetails() {
     if (!selectedContact) return;
     const meta = selectedContactData || contacts.find(c => c.remote_jid === selectedContact) || {};
+    const normalizedRemote = meta.display_remote_jid || normalizeRemoteJidForDisplay(meta.remote_jid);
+    const formattedPhone = normalizedRemote ? formatRemoteJid(normalizedRemote) : '-';
     const rows = [
-        ['Remote JID', meta.remote_jid || '-'],
-        ['Telefone formatado', formatRemoteJid(meta.remote_jid) || '-'],
+        ['Remote JID', normalizedRemote || '-'],
+        ['Telefone formatado', formattedPhone || '-'],
         ['Nome do contato', meta.contact_name || meta.status_name || '-'],
         ['Status name', meta.status_name || '-'],
         ['Mensagens', meta.message_count ?? 0],
         ['Última mensagem', formatDateTime(meta.last_timestamp)]
     ];
     const statusLabel = getContactStatusLabel(meta);
-    const contactSubtitle = (meta.contact_name || meta.status_name || formatRemoteJid(meta.remote_jid) || '').trim() || 'Não definido';
+    const contactSubtitle = (meta.contact_name || meta.status_name || formatRemoteJid(normalizedRemote) || '').trim() || 'Não definido';
     const avatarInner = meta.profile_picture
         ? `<img src="${escapeHtml(meta.profile_picture)}" alt="${escapeHtml(statusLabel)}" class="w-full h-full object-cover">`
         : `<span>${escapeHtml(statusLabel.charAt(0).toUpperCase() || '')}</span>`;
@@ -1285,6 +1986,116 @@ async function openContactDetails() {
     contactDetailsModal.classList.remove('hidden');
 }
 
+function renderVariablesSection(title, itemsMarkup) {
+    return `
+        <div class="rounded-2xl border border-mid bg-slate-50 p-3 space-y-2">
+            <div class="text-xs font-semibold uppercase tracking-wide text-slate-400">${title}</div>
+            ${itemsMarkup}
+        </div>
+    `;
+}
+
+function renderVariablesBody(payload) {
+    const persistent = Array.isArray(payload?.persistent) ? payload.persistent : [];
+    const context = Array.isArray(payload?.context) ? payload.context : [];
+    const tags = Array.isArray(payload?.tags) ? payload.tags : [];
+
+    const renderList = (items, scope, valueKey = 'value') => {
+        if (!items.length) {
+            return '<div class="text-[11px] text-slate-400">Nenhum item encontrado.</div>';
+        }
+        return items.map(item => {
+            const key = escapeHtml(String(item.key || item.tag || ''));
+            const value = escapeHtml(String(item[valueKey] ?? item.total ?? ''));
+            const display = value !== '' ? `${key}: ${value}` : key;
+            const actionKey = escapeHtml(String(item.key || item.tag || ''));
+            return `
+                <div class="flex items-center justify-between gap-3 bg-white border border-mid rounded-xl px-3 py-2">
+                    <div class="text-xs text-slate-700 truncate">${display}</div>
+                    <button type="button"
+                            class="text-[11px] text-error border border-error/60 rounded-full px-2 py-0.5 hover:bg-error/10"
+                            data-action="delete-variable" data-scope="${scope}" data-key="${actionKey}">
+                        Excluir
+                    </button>
+                </div>
+            `;
+        }).join('');
+    };
+
+    const persistentMarkup = renderVariablesSection('Variaveis da instância', renderList(persistent, 'persistent'));
+    const contextMarkup = renderVariablesSection('Contexto do contato', renderList(context, 'context'));
+    const tagsMarkup = renderVariablesSection('Tags de agendamentos', renderList(tags.map(item => ({
+        key: item.tag || '',
+        total: item.total || 0
+    })), 'tag', 'total'));
+
+    variablesBody.innerHTML = `
+        <div class="space-y-4">
+            ${persistentMarkup}
+            ${contextMarkup}
+            ${tagsMarkup}
+        </div>
+    `;
+}
+
+async function loadVariablesPanel() {
+    if (!selectedContact) {
+        variablesBody.innerHTML = '<p>Selecione uma conversa para ver os dados.</p>';
+        return;
+    }
+    variablesStatus.textContent = 'Carregando...';
+    try {
+        const response = await fetchWithCreds(buildAjaxUrl({ ajax_variables: '1', remote: selectedContact }));
+        const payload = await response.json().catch(() => null);
+        if (!response.ok || !payload?.ok) {
+            throw new Error(payload?.error || 'Erro ao carregar dados');
+        }
+        renderVariablesBody(payload);
+        variablesStatus.textContent = '';
+    } catch (error) {
+        variablesStatus.textContent = `Erro: ${error.message}`;
+        variablesBody.innerHTML = '<p>Não foi possível carregar os dados.</p>';
+    }
+}
+
+function openVariablesModal() {
+    if (!variablesModal) return;
+    variablesModal.classList.remove('hidden');
+    loadVariablesPanel();
+}
+
+function closeVariablesModal() {
+    variablesModal?.classList.add('hidden');
+}
+
+async function deleteVariable(scope, key) {
+    if (!scope || !key || !selectedContact) {
+        return;
+    }
+    const confirmText = scope === 'tag'
+        ? `Remover todos os agendamentos com a tag "${key}"?`
+        : `Excluir "${key}"?`;
+    if (!confirm(confirmText)) {
+        return;
+    }
+    variablesStatus.textContent = 'Excluindo...';
+    try {
+        const response = await fetchWithCreds(buildAjaxUrl({ ajax_variables_delete: '1' }), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ scope, key, remote: selectedContact })
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok || !payload?.ok) {
+            throw new Error(payload?.error || 'Erro ao excluir');
+        }
+        variablesStatus.textContent = `Excluído (${payload.deleted || 0}).`;
+        await loadVariablesPanel();
+    } catch (error) {
+        variablesStatus.textContent = `Erro: ${error.message}`;
+    }
+}
+
 function closeContactDetails() {
     contactDetailsModal.classList.add('hidden');
 }
@@ -1295,9 +2106,7 @@ function clearConversationUI() {
     messages[selectedContact] = [];
     renderMessages(selectedContact);
     chatStatus.textContent = 'Conversa limpa';
-    if (debugScheduledHint) {
-        debugScheduledHint.textContent = '';
-    }
+    renderDebugScheduledHint('');
 }
 
 async function deleteConversation() {
@@ -1306,7 +2115,11 @@ async function deleteConversation() {
     try {
         console.log(logPrefix, 'deleteConversation start', { remote: selectedContact });
         const response = await fetchWithCreds(buildAjaxUrl({ ajax_messages: '1', remote: selectedContact }), {
-            method: 'DELETE'
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ action: 'delete' })
         });
         const payload = await response.json().catch(() => null);
         if (!response.ok || !payload?.ok) {
@@ -1319,14 +2132,12 @@ async function deleteConversation() {
         selectedContact = null;
         selectedContactData = null;
         updateChatActions(false);
-        loadContacts();
+        loadContacts({ reset: true });
         stopMultiInputPolling();
         if (debugConversationId) {
             debugConversationId.textContent = '—';
         }
-        if (debugScheduledHint) {
-            debugScheduledHint.textContent = '';
-        }
+        renderDebugScheduledHint('');
     } catch (error) {
         console.error('Error deleting conversation:', error);
         chatStatus.textContent = `Erro ao apagar conversa: ${error.message}`;
@@ -1352,8 +2163,9 @@ function updateSystemStatus(status, data) {
 // Select contact and load messages
 function selectContact(remoteJid, contactName, element) {
     const decodedRemote = decodeURIComponent(remoteJid || '');
+    const resolvedRemote = resolveKnownRemoteJid(decodedRemote);
     const decodedName = decodeURIComponent(contactName || '');
-    if (isStatusBroadcastJid(decodedRemote)) {
+    if (isStatusBroadcastJid(resolvedRemote)) {
         chatStatus.textContent = 'Conversa do status não pode ser aberta.';
         updateChatActions(false);
         messageInput.disabled = true;
@@ -1363,17 +2175,16 @@ function selectContact(remoteJid, contactName, element) {
         }
         return;
     }
-    selectedContact = decodedRemote;
+    selectedContact = resolvedRemote;
     if (debugConversationId) {
-        debugConversationId.textContent = decodedRemote || '—';
+        debugConversationId.textContent = resolvedRemote || '—';
     }
-    if (debugScheduledHint) {
-        debugScheduledHint.textContent = '';
-    }
-    selectedContactData = contacts.find(c => c.remote_jid === decodedRemote) || null;
+        renderDebugScheduledHint('');
+    selectedContactData = contacts.find(c => c.remote_jid === resolvedRemote) || null;
+    renderChatHeaderAvatar(selectedContactData);
     updateChatActions(true);
-    console.log(logPrefix, 'selectContact', { remote: decodedRemote, name: decodedName || formatRemoteJid(decodedRemote) });
-    chatContactName.textContent = decodedName || formatRemoteJid(decodedRemote);
+    console.log(logPrefix, 'selectContact', { remote: resolvedRemote, name: decodedName || formatRemoteJid(resolvedRemote) });
+    chatContactName.textContent = decodedName || formatRemoteJid(resolvedRemote);
     chatStatus.textContent = 'Carregando mensagens...';
     
     // Update UI
@@ -1389,7 +2200,7 @@ function selectContact(remoteJid, contactName, element) {
     sendBtn.disabled = false;
 
     // Load messages
-    loadMessages(decodedRemote).finally(() => loadScheduledList(decodedRemote));
+    loadMessages(resolvedRemote).finally(() => loadScheduledList(resolvedRemote));
     startMultiInputPolling();
 }
 
@@ -1536,7 +2347,7 @@ async function handleNewConversationSubmit(event) {
         chatStatus.textContent = 'Mensagem enviada';
         updateChatActions(true);
         renderMessages(remoteJid);
-        loadContacts();
+        loadContacts({ reset: true });
         closeNewConversationModal();
         startMultiInputPolling();
     } catch (error) {
@@ -1559,12 +2370,21 @@ function parseMetadata(raw) {
 
 // Event listeners
 searchInput.addEventListener('input', renderContacts);
+if (contactsList) {
+    contactsList.addEventListener('scroll', () => {
+        const threshold = 120;
+        const distanceToBottom = contactsList.scrollHeight - contactsList.scrollTop - contactsList.clientHeight;
+        if (distanceToBottom <= threshold) {
+            loadContacts();
+        }
+    });
+}
 messageForm.addEventListener('submit', sendMessage);
 refreshBtn.addEventListener('click', () => {
     if (selectedContact) {
         loadMessages(selectedContact);
     } else {
-        loadContacts();
+        loadContacts({ reset: true });
     }
 });
 if (refreshScheduleBtn) {
@@ -1592,6 +2412,24 @@ if (contactDetailsBtn) {
 if (contactDetailsClose) {
     contactDetailsClose.addEventListener('click', closeContactDetails);
 }
+if (manageVariablesBtn) {
+    manageVariablesBtn.addEventListener('click', openVariablesModal);
+}
+if (variablesClose) {
+    variablesClose.addEventListener('click', closeVariablesModal);
+}
+if (variablesRefresh) {
+    variablesRefresh.addEventListener('click', loadVariablesPanel);
+}
+if (variablesBody) {
+    variablesBody.addEventListener('click', (event) => {
+        const target = event.target.closest('[data-action="delete-variable"]');
+        if (!target) return;
+        const scope = target.getAttribute('data-scope');
+        const key = target.getAttribute('data-key');
+        deleteVariable(scope, key);
+    });
+}
 if (clearChatBtn) {
     clearChatBtn.addEventListener('click', () => {
         clearConversationUI();
@@ -1599,6 +2437,15 @@ if (clearChatBtn) {
 }
 if (deleteChatBtn) {
     deleteChatBtn.addEventListener('click', deleteConversation);
+}
+if (debugScheduledHint) {
+    debugScheduledHint.addEventListener('click', (event) => {
+        const target = event.target;
+        if (target && target.matches('[data-export-log]')) {
+            event.preventDefault();
+            handleExportConversation();
+        }
+    });
 }
 if (newConversationBtn) {
     newConversationBtn.addEventListener('click', openNewConversationModal);
@@ -1616,6 +2463,15 @@ if (newConversationCancel) {
 if (newConversationForm) {
     newConversationForm.addEventListener('submit', handleNewConversationSubmit);
 }
+if (toggleScheduleFormBtn) {
+    toggleScheduleFormBtn.addEventListener('click', () => {
+        const isOpen = scheduleFormContainer && !scheduleFormContainer.classList.contains('hidden');
+        showScheduleForm(!isOpen);
+    });
+}
+if (manualScheduleForm) {
+    manualScheduleForm.addEventListener('submit', handleManualScheduleSubmit);
+}
 
 // System status tooltip
 systemStatusDot.addEventListener('mouseenter', () => {
@@ -1632,11 +2488,13 @@ setInterval(() => {
     if (selectedContact && !isLoading) {
         loadMessages(selectedContact);
     }
-    loadContacts();
+    if (contactsOffset <= CONTACTS_PAGE_SIZE) {
+        loadContacts({ reset: true });
+    }
 }, AUTO_REFRESH_INTERVAL);
 
 function initializeConversationView() {
-    loadContacts();
+    loadContacts({ reset: true });
     checkSystemHealth();
 
     if ('<?= $connectionStatus ?>' !== 'connected') {
@@ -1667,7 +2525,8 @@ if (statusBroadcastAlert) {
     }
     function closePanel() {
       panel?.classList.add('hidden');
-      setToggleAgText('Ver agendamentos');
+      showScheduleForm(false);
+      setToggleAgText('Agendamentos');
     }
 
     btn?.addEventListener('click', () => {

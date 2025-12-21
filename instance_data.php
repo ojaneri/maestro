@@ -18,6 +18,41 @@ const INSTANCE_AI_SETTING_KEYS = [
     'ai_multi_input_delay'
 ];
 
+const INSTANCE_AUDIO_TRANSCRIPTION_SETTING_KEYS = [
+    'audio_transcription_enabled',
+    'audio_transcription_gemini_api_key',
+    'audio_transcription_prefix'
+];
+
+const INSTANCE_SECRETARY_SETTING_KEYS = [
+    'secretary_enabled',
+    'secretary_idle_hours',
+    'secretary_initial_response',
+    'secretary_term_1',
+    'secretary_response_1',
+    'secretary_term_2',
+    'secretary_response_2',
+    'secretary_quick_replies'
+];
+
+const INSTANCE_ALARM_SETTING_KEYS = [
+    'alarm_whatsapp_enabled',
+    'alarm_whatsapp_recipients',
+    'alarm_whatsapp_interval',
+    'alarm_whatsapp_interval_unit',
+    'alarm_whatsapp_last_sent',
+    'alarm_server_enabled',
+    'alarm_server_recipients',
+    'alarm_server_interval',
+    'alarm_server_interval_unit',
+    'alarm_server_last_sent',
+    'alarm_error_enabled',
+    'alarm_error_recipients',
+    'alarm_error_interval',
+    'alarm_error_interval_unit',
+    'alarm_error_last_sent'
+];
+
 function openInstanceDatabase(bool $readonly = true): ?SQLite3
 {
     if (!file_exists(INSTANCE_DB_PATH)) {
@@ -27,7 +62,12 @@ function openInstanceDatabase(bool $readonly = true): ?SQLite3
 
     try {
         $flags = $readonly ? SQLITE3_OPEN_READONLY : (SQLITE3_OPEN_READWRITE | SQLITE3_OPEN_CREATE);
-        return new SQLite3(INSTANCE_DB_PATH, $flags);
+        $db = new SQLite3(INSTANCE_DB_PATH, $flags);
+        $db->busyTimeout(5000);
+        if (!$readonly) {
+            $db->exec('PRAGMA journal_mode = WAL');
+        }
+        return $db;
     } catch (Exception $e) {
         logDebug("Failed to open SQLite database: " . $e->getMessage());
         return null;
@@ -52,13 +92,13 @@ function sqliteTableExists(SQLite3 $db, string $tableName): bool
     return $exists;
 }
 
-function fetchInstanceAiSettings(SQLite3 $db, string $instanceId): array
+function fetchInstanceSettingsByKeys(SQLite3 $db, string $instanceId, array $keys): array
 {
-    if (!sqliteTableExists($db, 'settings')) {
+    if (!sqliteTableExists($db, 'settings') || empty($keys)) {
         return [];
     }
 
-    $escapedKeys = array_map(fn($key) => "'" . SQLite3::escapeString($key) . "'", INSTANCE_AI_SETTING_KEYS);
+    $escapedKeys = array_map(fn($key) => "'" . SQLite3::escapeString($key) . "'", $keys);
     $inClause = implode(',', $escapedKeys);
     $sql = "
         SELECT instance_id, key, value
@@ -93,6 +133,21 @@ function fetchInstanceAiSettings(SQLite3 $db, string $instanceId): array
     return array_merge($global, $local);
 }
 
+function fetchInstanceAiSettings(SQLite3 $db, string $instanceId): array
+{
+    return fetchInstanceSettingsByKeys($db, $instanceId, INSTANCE_AI_SETTING_KEYS);
+}
+
+function fetchInstanceAudioTranscriptionSettings(SQLite3 $db, string $instanceId): array
+{
+    return fetchInstanceSettingsByKeys($db, $instanceId, INSTANCE_AUDIO_TRANSCRIPTION_SETTING_KEYS);
+}
+
+function fetchInstanceSecretarySettings(SQLite3 $db, string $instanceId): array
+{
+    return fetchInstanceSettingsByKeys($db, $instanceId, INSTANCE_SECRETARY_SETTING_KEYS);
+}
+
 function buildAiMetadata(array $settings): array
 {
     $enabled = isset($settings['ai_enabled']) && (strtolower($settings['ai_enabled']) === 'true' || $settings['ai_enabled'] === '1');
@@ -119,6 +174,62 @@ function buildAiMetadata(array $settings): array
     ];
 }
 
+function buildAudioTranscriptionMetadata(array $settings): array
+{
+    $enabled = isset($settings['audio_transcription_enabled'])
+        && (strtolower($settings['audio_transcription_enabled']) === 'true'
+            || $settings['audio_transcription_enabled'] === '1');
+    $prefix = trim((string)($settings['audio_transcription_prefix'] ?? ''));
+    if ($prefix === '') {
+        $prefix = '🔊';
+    }
+
+    return [
+        'enabled' => $enabled,
+        'gemini_api_key' => $settings['audio_transcription_gemini_api_key'] ?? '',
+        'prefix' => $prefix
+    ];
+}
+
+function buildSecretaryMetadata(array $settings): array
+{
+    $enabled = isset($settings['secretary_enabled'])
+        && (strtolower($settings['secretary_enabled']) === 'true'
+            || $settings['secretary_enabled'] === '1');
+    $idleHours = max(0, (int)($settings['secretary_idle_hours'] ?? 0));
+    $quickReplies = [];
+    if (!empty($settings['secretary_quick_replies'])) {
+        $decoded = json_decode($settings['secretary_quick_replies'], true);
+        if (is_array($decoded)) {
+            $quickReplies = $decoded;
+        }
+    }
+
+    if (!$quickReplies) {
+        $term1 = trim($settings['secretary_term_1'] ?? '');
+        $response1 = trim($settings['secretary_response_1'] ?? '');
+        if ($term1 !== '' && $response1 !== '') {
+            $quickReplies[] = ['term' => $term1, 'response' => $response1];
+        }
+        $term2 = trim($settings['secretary_term_2'] ?? '');
+        $response2 = trim($settings['secretary_response_2'] ?? '');
+        if ($term2 !== '' && $response2 !== '') {
+            $quickReplies[] = ['term' => $term2, 'response' => $response2];
+        }
+    }
+
+    return [
+        'enabled' => $enabled,
+        'idle_hours' => $idleHours,
+        'initial_response' => $settings['secretary_initial_response'] ?? '',
+        'term_1' => $settings['secretary_term_1'] ?? '',
+        'response_1' => $settings['secretary_response_1'] ?? '',
+        'term_2' => $settings['secretary_term_2'] ?? '',
+        'response_2' => $settings['secretary_response_2'] ?? '',
+        'quick_replies' => $quickReplies
+    ];
+}
+
 function buildOpenAiMetadata(array $aiMetadata): array
 {
     return [
@@ -129,9 +240,128 @@ function buildOpenAiMetadata(array $aiMetadata): array
     ];
 }
 
+function fetchInstanceAlarmSettings(SQLite3 $db, string $instanceId): array
+{
+    return fetchInstanceSettingsByKeys($db, $instanceId, INSTANCE_ALARM_SETTING_KEYS);
+}
+
+function interpretBooleanSetting($value): bool
+{
+    if ($value === null) {
+        return false;
+    }
+    $normalized = strtolower(trim((string)$value));
+    return in_array($normalized, ['1', 'true', 'yes', 'on'], true);
+}
+
+function parseEmailList(string $value): array
+{
+    $parts = preg_split('/[,\s;]+/', trim($value), -1, PREG_SPLIT_NO_EMPTY);
+    $clean = [];
+    foreach ($parts as $part) {
+        $email = filter_var(trim($part), FILTER_VALIDATE_EMAIL);
+        if ($email && !in_array($email, $clean, true)) {
+            $clean[] = $email;
+        }
+    }
+    return $clean;
+}
+
+function normalizeAlarmInterval($value, $unit = ''): int
+{
+    $interval = (int)$value;
+    if ($interval <= 0) {
+        return 120;
+    }
+    $unit = strtolower(trim((string)$unit));
+    if ($unit === 'minutes' || $unit === 'min') {
+        return max(1, min(1440, $interval));
+    }
+    if ($interval === 2 || $interval === 24) {
+        return $interval * 60;
+    }
+    return max(1, min(1440, $interval));
+}
+
+function buildInstanceAlarmMetadata(array $settings): array
+{
+    $events = ['whatsapp', 'server', 'error'];
+    $metadata = [];
+
+    foreach ($events as $event) {
+        $enabled = interpretBooleanSetting($settings["alarm_{$event}_enabled"] ?? null);
+        $recipients = trim((string)($settings["alarm_{$event}_recipients"] ?? ''));
+        $unit = $settings["alarm_{$event}_interval_unit"] ?? '';
+        $interval = normalizeAlarmInterval($settings["alarm_{$event}_interval"] ?? 120, $unit);
+        $resolvedUnit = $unit !== '' ? $unit : 'minutes';
+        $metadata[$event] = [
+            'enabled' => $enabled,
+            'recipients' => $recipients,
+            'recipients_list' => parseEmailList($recipients),
+            'interval' => $interval,
+            'interval_unit' => $resolvedUnit,
+            'last_sent' => $settings["alarm_{$event}_last_sent"] ?? ''
+        ];
+    }
+
+    return $metadata;
+}
+
+function saveInstanceSettings(string $instanceId, array $entries): array
+{
+    $result = ['ok' => false, 'message' => ''];
+    $db = openInstanceDatabase(false);
+    if (!$db) {
+        $result['message'] = 'Não foi possível abrir chat_data.db';
+        return $result;
+    }
+
+    if (!sqliteTableExists($db, 'settings')) {
+        $result['message'] = 'Tabela settings ausente no SQLite';
+        $db->close();
+        return $result;
+    }
+
+    $sql = <<<SQL
+        INSERT INTO settings (instance_id, key, value)
+        VALUES (:instance, :key, :value)
+        ON CONFLICT(instance_id, key) DO UPDATE SET
+            value = excluded.value
+    SQL;
+
+    $stmt = $db->prepare($sql);
+    if (!$stmt) {
+        $result['message'] = 'Falha ao preparar instrução SQL';
+        $db->close();
+        return $result;
+    }
+
+    $allOk = true;
+    foreach ($entries as $key => $value) {
+        $stmt->bindValue(':instance', $instanceId ?? '', SQLITE3_TEXT);
+        $stmt->bindValue(':key', $key, SQLITE3_TEXT);
+        $stmt->bindValue(':value', $value ?? '', SQLITE3_TEXT);
+        $exec = $stmt->execute();
+        if (!$exec) {
+            $allOk = false;
+            $result['message'] = 'Erro SQL: ' . $db->lastErrorMsg();
+            break;
+        }
+        $stmt->reset();
+    }
+
+    $stmt->close();
+    $db->close();
+
+    if ($allOk) {
+        $result['ok'] = true;
+    }
+    return $result;
+}
+
 function loadInstancesFromDatabase(): array
 {
-    $db = openInstanceDatabase();
+    $db = openInstanceDatabase(false);
     if (!$db || !sqliteTableExists($db, 'instances')) {
         return [];
     }
@@ -157,6 +387,13 @@ function loadInstancesFromDatabase(): array
             $aiMetadata = buildAiMetadata($aiSettings);
             $row['ai'] = $aiMetadata;
             $row['openai'] = buildOpenAiMetadata($aiMetadata);
+            $audioSettings = fetchInstanceAudioTranscriptionSettings($db, $instanceId);
+            $row['audio_transcription'] = buildAudioTranscriptionMetadata($audioSettings);
+            $secretarySettings = fetchInstanceSecretarySettings($db, $instanceId);
+            $row['secretary'] = buildSecretaryMetadata($secretarySettings);
+            $alarmSettings = fetchInstanceAlarmSettings($db, $instanceId);
+            $row['alarms'] = buildInstanceAlarmMetadata($alarmSettings);
+            ensureInstanceHasApiKey($db, $row);
             $instances[$instanceId] = $row;
         }
         $result->finalize();
@@ -170,7 +407,7 @@ function loadInstancesFromDatabase(): array
 
 function loadInstanceRecordFromDatabase(string $instanceId): ?array
 {
-    $db = openInstanceDatabase();
+    $db = openInstanceDatabase(false);
     if (!$db || !sqliteTableExists($db, 'instances')) {
         return null;
     }
@@ -198,6 +435,13 @@ function loadInstanceRecordFromDatabase(string $instanceId): ?array
             $row['ai'] = $aiMetadata;
             $row['openai'] = buildOpenAiMetadata($aiMetadata);
             $row['port'] = isset($row['port']) ? (int)$row['port'] : null;
+            $audioSettings = fetchInstanceAudioTranscriptionSettings($db, $instanceId);
+            $row['audio_transcription'] = buildAudioTranscriptionMetadata($audioSettings);
+            $secretarySettings = fetchInstanceSecretarySettings($db, $instanceId);
+            $row['secretary'] = buildSecretaryMetadata($secretarySettings);
+            $alarmSettings = fetchInstanceAlarmSettings($db, $instanceId);
+            $row['alarms'] = buildInstanceAlarmMetadata($alarmSettings);
+            ensureInstanceHasApiKey($db, $row);
             $record = $row;
         }
         $result->finalize();
@@ -312,6 +556,36 @@ function upsertInstanceRecordToSql(string $instanceId, array $payload): array
     $stmt->close();
     $db->close();
     return $result;
+}
+
+function ensureInstanceHasApiKey(SQLite3 $db, array &$record): void
+{
+    if (!$record || empty(trim((string)($record['instance_id'] ?? '')))) {
+        return;
+    }
+
+    if (!empty(trim((string)($record['api_key'] ?? '')))) {
+        return;
+    }
+
+    $instanceId = $record['instance_id'];
+    $newKey = bin2hex(random_bytes(16));
+    $stmt = $db->prepare("
+        UPDATE instances
+        SET api_key = :key, updated_at = CURRENT_TIMESTAMP
+        WHERE instance_id = :instance
+    ");
+
+    if (!$stmt) {
+        return;
+    }
+
+    $stmt->bindValue(':key', $newKey, SQLITE3_TEXT);
+    $stmt->bindValue(':instance', $instanceId, SQLITE3_TEXT);
+    $stmt->execute();
+    $stmt->close();
+
+    $record['api_key'] = $newKey;
 }
 
 function deleteInstanceRecordFromSql(string $instanceId): bool

@@ -45,9 +45,18 @@ if (!Readable.fromWeb) {
 }
 
 const UPLOADS_DIR = path.join(__dirname, "uploads")
+const ASSETS_UPLOADS_DIR = path.resolve(__dirname, "assets", "uploads")
+const REMOTE_CACHE_DIR = path.join(ASSETS_UPLOADS_DIR, "remote-cache")
 if (!fs.existsSync(UPLOADS_DIR)) {
     fs.mkdirSync(UPLOADS_DIR, { recursive: true })
 }
+if (!fs.existsSync(REMOTE_CACHE_DIR)) {
+    fs.mkdirSync(REMOTE_CACHE_DIR, { recursive: true })
+}
+
+const QR_TOKEN_DIR = path.join(__dirname, "storage", "qr_tokens")
+const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "https://janeri.com.br/api/envio/wpp").replace(/\/+$/, "")
+const MAESTRO_LOGO_URL = `${PUBLIC_BASE_URL}/assets/maestro-logo.png`
 
 // ===== FIX: garantir globalThis.crypto (Baileys exige WebCrypto) =====
 if (!globalThis.crypto) {
@@ -81,6 +90,110 @@ function log(...args) {
     console.log(`[${INSTANCE_ID}]`, ...args)
 }
 
+function ensureQrTokenDir() {
+    if (!fs.existsSync(QR_TOKEN_DIR)) {
+        fs.mkdirSync(QR_TOKEN_DIR, { recursive: true })
+    }
+}
+
+function toBase64Url(buffer) {
+    return buffer
+        .toString("base64")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "")
+}
+
+function cleanupExpiredQrTokens(now = Date.now()) {
+    try {
+        ensureQrTokenDir()
+        const entries = fs.readdirSync(QR_TOKEN_DIR)
+        entries.forEach(fileName => {
+            if (!fileName.endsWith(".json")) return
+            const fullPath = path.join(QR_TOKEN_DIR, fileName)
+            try {
+                const raw = fs.readFileSync(fullPath, "utf8")
+                const data = JSON.parse(raw)
+                const expiresAt = Number(data?.expires_at_ms || 0)
+                if (expiresAt && expiresAt <= now) {
+                    fs.unlinkSync(fullPath)
+                }
+            } catch (err) {
+                fs.unlinkSync(fullPath)
+            }
+        })
+    } catch (err) {
+        log("Erro ao limpar tokens QR:", err.message)
+    }
+}
+
+function generateQrAccessToken(instanceId) {
+    ensureQrTokenDir()
+    cleanupExpiredQrTokens()
+    const token = toBase64Url(nodeCrypto.randomBytes(32))
+    const createdAt = new Date()
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000)
+    const payload = {
+        token,
+        instance_id: instanceId,
+        created_at: createdAt.toISOString(),
+        expires_at: expiresAt.toISOString(),
+        expires_at_ms: expiresAt.getTime()
+    }
+    const filePath = path.join(QR_TOKEN_DIR, `${token}.json`)
+    fs.writeFileSync(filePath, JSON.stringify(payload, null, 2), { mode: 0o600 })
+    return payload
+}
+
+function escapeHtml(value) {
+    if (value === null || value === undefined) return ""
+    return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;")
+}
+
+function formatIntervalMinutes(value) {
+    const minutes = Number(value || 0)
+    if (!Number.isFinite(minutes) || minutes <= 0) {
+        return "N/A"
+    }
+    if (minutes < 60) {
+        return `${minutes} min`
+    }
+    const hours = Math.floor(minutes / 60)
+    const remainder = minutes % 60
+    if (!remainder) {
+        return `${hours}h`
+    }
+    return `${hours}h ${remainder}m`
+}
+
+function collectAlarmDebugInfo(eventKey, meta) {
+    const now = new Date().toISOString()
+    const instanceName = (instanceConfig?.name && instanceConfig.name.trim()) || INSTANCE_ID
+    const port = instanceConfig?.port || PORT
+    const host = os.hostname() || "desconhecido"
+    const errorDetail = lastConnectionError || "sem erros registrados"
+    return {
+        instanceName,
+        instanceId: INSTANCE_ID,
+        eventKey,
+        port,
+        detectedAt: now,
+        connectionStatus,
+        whatsappConnected: whatsappConnected ? "sim" : "não",
+        lastError: errorDetail,
+        process: `pid=${process.pid}, host=${host}`,
+        node: `${process.version} (${process.platform})`,
+        intervalMinutes: meta?.interval ?? "N/A",
+        intervalLabel: formatIntervalMinutes(meta?.interval),
+        lastSent: meta?.lastSent || "nunca"
+    }
+}
+
 function snippet(value, limit = 120) {
     if (!value) return ""
     const cleaned = String(value).replace(/\s+/g, " ").trim()
@@ -112,6 +225,7 @@ const SCHEDULE_TIMEZONE_OFFSET_HOURS = -3 // UTC-3 fixed
 const SCHEDULE_TIMEZONE_LABEL = "America/Fortaleza"
 const SCHEDULE_CHECK_INTERVAL_MS = 30 * 1000
 const SCHEDULE_FETCH_LIMIT = 10
+const WHATSAPP_ALARM_VERIFY_DELAY_MS = Number(process.env.WHATSAPP_ALARM_VERIFY_DELAY_MS || 15000)
 
 const GEMINI_ALLOWED_MEDIA_MIME_TYPES = new Set([
     "image/jpeg",
@@ -512,6 +626,7 @@ const DEFAULT_MAX_TOKENS = 600
 const DEFAULT_PROVIDER = "openai"
 const DEFAULT_GEMINI_INSTRUCTION = "Você é um assistente atencioso e prestativo. Mantenha o tom profissional e informal. Sempre separe claramente o texto visível ao usuário do bloco de instruções/funções usando o marcador lógico &&& antes de iniciar os comandos."
 const DEFAULT_MULTI_INPUT_DELAY = 0
+const DEFAULT_AUDIO_TRANSCRIPTION_PREFIX = "🔊"
 const DEFAULT_SCHEDULE_TAG = "default"
 const DEFAULT_SCHEDULE_TIPO = "followup"
 const AI_SETTING_KEYS = [
@@ -529,6 +644,38 @@ const AI_SETTING_KEYS = [
     "gemini_api_key",
     "gemini_instruction",
     "ai_multi_input_delay"
+]
+const AUDIO_TRANSCRIPTION_SETTING_KEYS = [
+    "audio_transcription_enabled",
+    "audio_transcription_gemini_api_key",
+    "audio_transcription_prefix"
+]
+const SECRETARY_SETTING_KEYS = [
+    "secretary_enabled",
+    "secretary_idle_hours",
+    "secretary_initial_response",
+    "secretary_term_1",
+    "secretary_response_1",
+    "secretary_term_2",
+    "secretary_response_2",
+    "secretary_quick_replies"
+]
+const ALARM_SETTING_KEYS = [
+    "alarm_whatsapp_enabled",
+    "alarm_whatsapp_recipients",
+    "alarm_whatsapp_interval",
+    "alarm_whatsapp_interval_unit",
+    "alarm_whatsapp_last_sent",
+    "alarm_server_enabled",
+    "alarm_server_recipients",
+    "alarm_server_interval",
+    "alarm_server_interval_unit",
+    "alarm_server_last_sent",
+    "alarm_error_enabled",
+    "alarm_error_recipients",
+    "alarm_error_interval",
+    "alarm_error_interval_unit",
+    "alarm_error_last_sent"
 ]
 
 const ERROR_RESPONSE_OPTIONS = [
@@ -557,7 +704,24 @@ function isIndividualJid(remoteJid) {
 }
 
 function unescapeCommandString(value) {
-    return value.replace(/\\(.)/g, "$1")
+    return value.replace(/\\(.)/g, (_, char) => {
+        switch (char) {
+            case "n":
+                return "\n"
+            case "r":
+                return "\r"
+            case "t":
+                return "\t"
+            case "\\":
+                return "\\"
+            case '"':
+                return '"'
+            case "'":
+                return "'"
+            default:
+                return char
+        }
+    })
 }
 
 const assistantFunctionNames = [
@@ -578,13 +742,15 @@ const assistantFunctionNames = [
     "set_contexto",
     "get_contexto",
     "limpar_contexto",
+    "set_variavel",
+    "get_variavel",
     "optout",
     "status_followup",
     "log_evento",
     "tempo_sem_interacao"
 ]
 
-const assistantCommandPattern = `\\b(${assistantFunctionNames.join("|")})\\s*\\(([^)]*)\\)`
+const assistantCommandPattern = `\\b(${assistantFunctionNames.join("|")})\\s*\\(`
 
 function createAssistantCommandRegex() {
     return new RegExp(assistantCommandPattern, "gi")
@@ -614,6 +780,7 @@ function parseFunctionArgs(rawArgs) {
         }
 
         if (char === "\\") {
+            buffer += char
             escape = true
             continue
         }
@@ -653,16 +820,62 @@ function extractAssistantCommands(text) {
     const regex = createAssistantCommandRegex()
     let match
     while ((match = regex.exec(text)) !== null) {
-        const [, type, rawArgs] = match
+        const type = match[1]
+        const start = match.index
+        const openIndex = text.indexOf("(", match.index)
+        if (openIndex === -1) {
+            continue
+        }
+        let quote = null
+        let escape = false
+        let depth = 1
+        let endIndex = -1
+        for (let i = openIndex + 1; i < text.length; i++) {
+            const char = text[i]
+            if (escape) {
+                escape = false
+                continue
+            }
+            if (char === "\\") {
+                escape = true
+                continue
+            }
+            if (quote) {
+                if (char === quote) {
+                    quote = null
+                }
+                continue
+            }
+            if (char === '"' || char === "'") {
+                quote = char
+                continue
+            }
+            if (char === "(") {
+                depth += 1
+                continue
+            }
+            if (char === ")") {
+                depth -= 1
+                if (depth === 0) {
+                    endIndex = i + 1
+                    break
+                }
+            }
+        }
+        if (endIndex === -1) {
+            continue
+        }
+        const rawArgs = text.slice(openIndex + 1, endIndex - 1)
         commands.push({
             type: type.toLowerCase(),
             args: parseFunctionArgs(rawArgs),
             position: {
-                start: match.index,
-                end: match.index + match[0].length
+                start,
+                end: endIndex
             }
         })
-        ranges.push({ start: match.index, end: match.index + match[0].length })
+        ranges.push({ start, end: endIndex })
+        regex.lastIndex = endIndex
     }
 
     if (!commands.length) {
@@ -686,8 +899,9 @@ function extractAssistantCommands(text) {
 }
 
 function stripAssistantCalls(text) {
-    if (!text) return text;
-    return text.replace(createAssistantCommandRegex(), '').trim();
+    if (!text) return text
+    const { cleanedText } = extractAssistantCommands(text)
+    return (cleanedText || "").trim()
 }
 
 function normalizeScheduleTag(value) {
@@ -702,6 +916,102 @@ function normalizeScheduleTipo(value) {
 
 function buildFunctionResult(ok, code, message, data = {}) {
     return { ok, code, message, data }
+}
+
+function formatContextEntries(entries) {
+    if (!Array.isArray(entries) || entries.length === 0) {
+        return "vazio"
+    }
+    const pairs = entries
+        .map(entry => {
+            const key = (entry?.key || "").trim()
+            const value = entry?.value === null || entry?.value === undefined ? "" : String(entry.value).trim()
+            if (!key) return null
+            return `${key}=${value}`
+        })
+        .filter(Boolean)
+    return pairs.length ? pairs.join("; ") : "vazio"
+}
+
+function formatCurrentDateTimeUtc3() {
+    try {
+        const formatter = new Intl.DateTimeFormat("pt-BR", {
+            timeZone: "America/Fortaleza",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false
+        })
+        const parts = formatter.formatToParts(new Date())
+        const map = Object.fromEntries(parts.map(part => [part.type, part.value]))
+        const date = `${map.year}-${map.month}-${map.day}`
+        const time = `${map.hour}:${map.minute}:${map.second}`
+        return `${date} ${time}`
+    } catch (err) {
+        return new Date().toISOString()
+    }
+}
+
+async function buildInjectedPromptContext(remoteJid) {
+    if (!db || !remoteJid) {
+        return ""
+    }
+
+    let estado = null
+    let contextEntries = []
+    let persistentEntries = []
+    let statusSummary = "pendentes=0; trilhas=nenhuma; proximo=nenhum"
+    let tagsSummary = "nenhuma"
+
+    try {
+        estado = await db.getContactContext(INSTANCE_ID, remoteJid, "estado")
+    } catch (err) {
+        log("Erro ao obter estado do funil:", err.message)
+    }
+
+    try {
+        contextEntries = await db.listContactContext(INSTANCE_ID, remoteJid)
+    } catch (err) {
+        log("Erro ao listar contexto do contato:", err.message)
+    }
+
+    try {
+        const scheduled = await db.listScheduledMessages(INSTANCE_ID, remoteJid)
+        const upcoming = scheduled.filter(msg => msg.status === "pending")
+        const tracks = Array.from(new Set(upcoming.map(msg => `${msg.tag}:${msg.tipo}`)))
+        const tags = Array.from(new Set(scheduled.map(msg => msg.tag).filter(Boolean)))
+        const next = upcoming[0]
+        statusSummary = `pendentes=${upcoming.length}; trilhas=${tracks.length ? tracks.join(", ") : "nenhuma"}; proximo=${next ? next.scheduled_at : "nenhum"}`
+        tagsSummary = tags.length ? tags.join(", ") : "nenhuma"
+    } catch (err) {
+        log("Erro ao obter status de follow-up:", err.message)
+    }
+
+    try {
+        if (typeof db.listPersistentVariables === "function") {
+            persistentEntries = await db.listPersistentVariables(INSTANCE_ID)
+        }
+    } catch (err) {
+        log("Erro ao listar variáveis persistentes:", err.message)
+    }
+
+    const filteredContext = contextEntries.filter(entry => entry?.key !== "estado")
+    const estadoLabel = estado ? estado.trim() : "não definido"
+    const contextLabel = formatContextEntries(filteredContext)
+    const persistentLabel = formatContextEntries(persistentEntries)
+    const nowLabel = formatCurrentDateTimeUtc3()
+
+    return [
+        `data_hora_utc3: ${nowLabel}`,
+        `estado: ${estadoLabel}`,
+        `contexto: ${contextLabel}`,
+        `variaveis: ${persistentLabel}`,
+        `tags: ${tagsSummary}`,
+        `status_followup: ${statusSummary}`
+    ].join("\n")
 }
 
 function ensureBrazilCountryCode(digits) {
@@ -723,12 +1033,136 @@ function formatOutgoingJid(value) {
     return normalized ? `${normalized}@s.whatsapp.net` : null
 }
 
-async function sendMailCommand(to, subject, body) {
+const WHATSAPP_CACHE_TTL_DAYS = 90
+
+function shouldCheckWhatsAppRecipient(jid) {
+    if (!jid || typeof jid !== "string") {
+        return false
+    }
+    const lower = jid.toLowerCase()
+    if (lower.startsWith("status@broadcast")) {
+        return false
+    }
+    return lower.endsWith("@s.whatsapp.net")
+}
+
+function extractPhoneFromJid(jid) {
+    if (!jid || typeof jid !== "string") {
+        return ""
+    }
+    return jid.split("@")[0].replace(/\D/g, "")
+}
+
+async function ensureContactMetadata(jid) {
+    if (!db || !jid) {
+        return
+    }
+    try {
+        const metadata = await db.getContactMetadata(INSTANCE_ID, jid)
+        const needsStatus = !metadata?.status_name
+        const needsPicture = !metadata?.profile_picture
+        if (!needsStatus && !needsPicture) {
+            return
+        }
+        const [statusName, profilePicture] = await Promise.all([
+            needsStatus ? fetchStatusName(jid) : Promise.resolve(null),
+            needsPicture ? fetchProfilePictureUrl(jid) : Promise.resolve(null)
+        ])
+        await updateContactMetadata(jid, { statusName, profilePicture })
+    } catch (err) {
+        log("Erro ao atualizar metadata do contato:", err.message)
+    }
+}
+
+async function ensureWhatsAppRecipientExists(jid) {
+    if (!shouldCheckWhatsAppRecipient(jid)) {
+        return true
+    }
+    if (!sock || !whatsappConnected) {
+        throw new Error("whatsapp(): WhatsApp não conectado")
+    }
+    const phone = extractPhoneFromJid(jid)
+    if (!phone) {
+        throw new Error("whatsapp(): número inválido")
+    }
+    if (db?.getWhatsAppNumberCache) {
+        try {
+            const cached = await db.getWhatsAppNumberCache(phone, WHATSAPP_CACHE_TTL_DAYS)
+            if (cached) {
+                if (cached.exists) {
+                    await ensureContactMetadata(`${phone}@s.whatsapp.net`)
+                    return true
+                }
+                throw new Error("whatsapp(): número não existe no WhatsApp")
+            }
+        } catch (err) {
+            log("Erro ao ler cache WhatsApp:", err.message)
+        }
+    }
+    const result = await sock.onWhatsApp(phone)
+    const resolvedJid = (Array.isArray(result) && result[0]?.jid) ? result[0].jid : jid
+    const exists = Array.isArray(result) && result[0]?.exists === true
+    if (db?.setWhatsAppNumberCache) {
+        try {
+            await db.setWhatsAppNumberCache(phone, exists)
+        } catch (err) {
+            log("Erro ao salvar cache WhatsApp:", err.message)
+        }
+    }
+    if (!exists) {
+        throw new Error("whatsapp(): número não existe no WhatsApp")
+    }
+    await ensureContactMetadata(resolvedJid)
+    return true
+}
+
+async function sendWhatsAppMessage(jid, payload) {
+    if (!sock || !whatsappConnected) {
+        throw new Error("WhatsApp não conectado")
+    }
+    log("flow.send.request", {
+        jid,
+        kind: payload?.text
+            ? "text"
+            : payload?.image
+                ? "image"
+                : payload?.audio
+                    ? "audio"
+                : payload?.video
+                    ? "video"
+                    : payload?.contacts
+                        ? "contact"
+                        : "other"
+    })
+    await ensureWhatsAppRecipientExists(jid)
+    const result = await sock.sendMessage(jid, payload)
+    log("flow.send.done", { jid })
+    return result
+}
+
+async function sendMailCommand(to, subject, body, from, isHtml = null) {
     if (!to) {
         throw new Error("mail(): endereço de destino ausente")
     }
 
-    const mailData = `To: ${to}\nSubject: ${subject || "Sem assunto"}\n\n${body || ""}\n`
+    if (isHtml === null || isHtml === undefined) {
+        const rawBody = body || ""
+        const htmlHint = /<!doctype\s+html|<html\b|<body\b|<table\b|<div\b|<span\b|<p\b|<br\b/i
+        isHtml = htmlHint.test(rawBody)
+    }
+
+    const sender = (from || "noreply@janeri.com.br").trim() || "noreply@janeri.com.br"
+    const headers = [
+        `From: ${sender}`,
+        `To: ${to}`,
+        `Subject: ${subject || "Sem assunto"}`
+    ]
+    if (isHtml) {
+        headers.push("MIME-Version: 1.0")
+        headers.push("Content-Type: text/html; charset=UTF-8")
+        headers.push("Content-Transfer-Encoding: 8bit")
+    }
+    const mailData = `${headers.join("\n")}\n\n${body || ""}\n`
     return new Promise((resolve, reject) => {
         const child = exec("sendmail -t", (err, stdout, stderr) => {
             if (err) {
@@ -751,7 +1185,7 @@ async function sendWhatsAppCommand(remoteJid, message) {
         throw new Error("whatsapp(): WhatsApp não conectado")
     }
 
-    await sock.sendMessage(jid, { text: message })
+    await sendWhatsAppMessage(jid, { text: message })
     if (db) {
         await db.saveMessage(INSTANCE_ID, jid, "assistant", message, "outbound")
     }
@@ -783,10 +1217,11 @@ async function handleAssistantCommands(remoteJid, aiText, providedConfig = null,
             let result
             switch (command.type) {
                 case "mail": {
-                    await sendMailCommand(command.args[0], command.args[1], command.args[2])
+                    await sendMailCommand(command.args[0], command.args[1], command.args[2], command.args[3])
                     log("Executor mail() acionado para", command.args[0])
                     result = buildFunctionResult(true, "OK", "email enviado", {
-                        to: command.args[0] || ""
+                        to: command.args[0] || "",
+                        from: command.args[3] || "noreply@janeri.com.br"
                     })
                     break
                 }
@@ -1027,6 +1462,34 @@ async function handleAssistantCommands(remoteJid, aiText, providedConfig = null,
                     result = buildFunctionResult(true, "OK", "contexto limpo", { deleted: deleted.deleted, keys })
                     break
                 }
+                case "set_variavel": {
+                    if (!db) {
+                        throw new Error("set_variavel(): banco de dados indisponível")
+                    }
+                    const key = (command.args[0] || "").trim()
+                    const value = (command.args[1] || "").trim()
+                    if (!key || value === "") {
+                        throw new Error("set_variavel(): chave e valor obrigatórios")
+                    }
+                    await db.setPersistentVariable(INSTANCE_ID, key, value)
+                    functionNotes.push(`Variável ${key} salva`)
+                    result = buildFunctionResult(true, "OK", "variável persistente salva", { key, value })
+                    break
+                }
+                case "get_variavel": {
+                    if (!db) {
+                        throw new Error("get_variavel(): banco de dados indisponível")
+                    }
+                    const key = (command.args[0] || "").trim()
+                    if (!key) {
+                        throw new Error("get_variavel(): chave obrigatória")
+                    }
+                    const value = await db.getPersistentVariable(INSTANCE_ID, key)
+                    const message = value ? `Variável ${key}: ${value}` : `Variável ${key} não encontrada`
+                    functionNotes.push(message)
+                    result = buildFunctionResult(true, "OK", message, { key, value })
+                    break
+                }
                 case "optout": {
                     if (!db) {
                         throw new Error("optout(): banco de dados indisponível")
@@ -1143,7 +1606,7 @@ async function processScheduledMessages() {
 
         for (const job of dueMessages) {
             try {
-                await sock.sendMessage(job.remote_jid, { text: job.message })
+                await sendWhatsAppMessage(job.remote_jid, { text: job.message })
                 await db.saveMessage(INSTANCE_ID, job.remote_jid, "assistant", job.message, "outbound")
                 await db.updateScheduledMessageStatus(job.id, "sent")
                 log("Mensagem agendada enviada para", job.remote_jid, job.scheduled_at)
@@ -1173,6 +1636,16 @@ async function fetchProfilePictureUrl(remoteJid) {
     try {
         const url = await sock.profilePictureUrl(remoteJid, "image")
         return normalizeMetaField(url)
+    } catch (err) {
+        return null
+    }
+}
+
+async function fetchStatusName(remoteJid) {
+    if (!sock || !remoteJid) return null
+    try {
+        const statusData = await sock.fetchStatus(remoteJid)
+        return normalizeMetaField(statusData?.status)
     } catch (err) {
         return null
     }
@@ -1244,10 +1717,22 @@ function extractMessageContentText(message) {
         .trim()
 }
 
+function appendInjectedInstruction(base, injected) {
+    const baseText = (base || "").trim()
+    const injectedText = (injected || "").trim()
+    if (!injectedText) {
+        return baseText
+    }
+    const header = "Contexto interno (não exibir ao usuário):"
+    const block = `${header}\n${injectedText}`
+    return baseText ? `${baseText}\n\n${block}` : block
+}
+
 function buildResponsesPayload(historyMessages, messageBody, config) {
     const conversation = []
-    if (config.system_prompt) {
-        conversation.push({ role: "system", content: config.system_prompt })
+    const systemPrompt = appendInjectedInstruction(config.system_prompt, config.injected_context)
+    if (systemPrompt) {
+        conversation.push({ role: "system", content: systemPrompt })
     }
     if (config.assistant_prompt) {
         conversation.push({ role: "assistant", content: config.assistant_prompt })
@@ -1298,6 +1783,7 @@ async function generateOpenAIResponse(aiConfig, remoteJid, messageBody) {
         if (!aiConfig.assistant_id) {
             throw new Error("Assistant ID necessário para o modo Assistants")
         }
+        const instructionText = appendInjectedInstruction(aiConfig.system_prompt, aiConfig.injected_context) || undefined
 
         const threadMeta = db ? await db.getThreadMetadata(INSTANCE_ID, remoteJid) : null
         let threadId = threadMeta?.threadId || null
@@ -1308,7 +1794,7 @@ async function generateOpenAIResponse(aiConfig, remoteJid, messageBody) {
                 model: aiConfig.model,
                 temperature: aiConfig.temperature,
                 max_completion_tokens: aiConfig.max_tokens,
-                instructions: aiConfig.system_prompt || undefined,
+                instructions: instructionText,
                 additional_instructions: aiConfig.assistant_prompt || undefined,
                 additional_messages: [{ role: "user", content: messageBody }],
                 truncation_strategy: {
@@ -1323,7 +1809,7 @@ async function generateOpenAIResponse(aiConfig, remoteJid, messageBody) {
                 model: aiConfig.model,
                 temperature: aiConfig.temperature,
                 max_completion_tokens: aiConfig.max_tokens,
-                instructions: aiConfig.system_prompt || undefined,
+                instructions: instructionText,
                 additional_instructions: aiConfig.assistant_prompt || undefined,
                 additional_messages: [{ role: "user", content: messageBody }],
                 truncation_strategy: {
@@ -1423,7 +1909,10 @@ async function callGeminiContent(aiConfig, parts) {
 
     const model = aiConfig.model || "gemini-2.5-flash"
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(aiConfig.gemini_api_key)}`
-    const instructionText = (aiConfig.gemini_instruction || DEFAULT_GEMINI_INSTRUCTION).trim()
+    const instructionText = appendInjectedInstruction(
+        aiConfig.gemini_instruction || DEFAULT_GEMINI_INSTRUCTION,
+        aiConfig.injected_context
+    ).trim()
     const payloadParts = parts.slice()
     if (instructionText) {
         payloadParts.unshift({ text: instructionText })
@@ -1496,6 +1985,128 @@ function fileToGenerativePart(filePath) {
     }
 }
 
+function buildMediaPromptText(mediaEntries, textEntries = []) {
+    const textChunk = textEntries
+        .map(entry => entry?.text || "")
+        .map(text => text.trim())
+        .filter(Boolean)
+        .join("\n")
+
+    const mediaLines = (mediaEntries || [])
+        .map((entry, index) => {
+            const payload = entry?.mediaPayload
+            if (!payload) return null
+            const captionText = (payload.node?.caption || "").trim()
+            const fallbackDesc = payload.fallbackDescription || ""
+            const description = captionText || fallbackDesc
+            const label = payload.type === "imagem" ? "IMAGEM" : "MÍDIA"
+            if (!description) {
+                return `${label} ${index + 1}`
+            }
+            return `${label} ${index + 1}: ${description}`
+        })
+        .filter(Boolean)
+
+    const parts = []
+    if (textChunk) {
+        parts.push(textChunk)
+    }
+    if (mediaLines.length) {
+        parts.push(...mediaLines)
+    }
+    return parts.join("\n").trim()
+}
+
+function normalizeSecretaryTerm(value) {
+    return (value || "").trim().toLowerCase()
+}
+
+function pickSecretaryTermResponse(messageBody, config) {
+    const normalizedMessage = normalizeSecretaryTerm(messageBody)
+    if (!normalizedMessage) {
+        return null
+    }
+    const quickReplies = Array.isArray(config?.quick_replies) ? config.quick_replies : []
+    for (const entry of quickReplies) {
+        const term = normalizeSecretaryTerm(entry?.term)
+        if (term && normalizedMessage === term) {
+            return (entry?.response || "").trim() || null
+        }
+    }
+    const term1 = normalizeSecretaryTerm(config?.term_1)
+    if (term1 && normalizedMessage === term1) {
+        return (config?.response_1 || "").trim() || null
+    }
+    const term2 = normalizeSecretaryTerm(config?.term_2)
+    if (term2 && normalizedMessage === term2) {
+        return (config?.response_2 || "").trim() || null
+    }
+    return null
+}
+
+function shouldTriggerSecretaryInitial(lastInboundAt, config) {
+    if (!config?.enabled) return false
+    const idleHours = Math.max(0, toNumber(config?.idle_hours, 0))
+    if (idleHours <= 0) return false
+    const initialText = (config?.initial_response || "").trim()
+    if (!initialText) return false
+    if (!lastInboundAt) return true
+    const last = lastInboundAt instanceof Date ? lastInboundAt : new Date(lastInboundAt)
+    if (Number.isNaN(last?.getTime?.())) return true
+    const elapsedMs = Date.now() - last.getTime()
+    return elapsedMs > idleHours * 60 * 60 * 1000
+}
+
+async function sendSecretaryReply(remoteJid, message, reason = "secretary") {
+    const trimmed = (message || "").trim()
+    if (!trimmed) {
+        return
+    }
+    if (!sock) {
+        throw new Error("WhatsApp não conectado")
+    }
+    await sendWhatsAppMessage(remoteJid, { text: trimmed })
+    if (db) {
+        try {
+            const metadata = JSON.stringify({ source: "secretary", reason })
+            await db.saveMessage(INSTANCE_ID, remoteJid, "assistant", trimmed, "outbound", metadata)
+        } catch (err) {
+            log("Error saving secretary reply:", err.message)
+        }
+    }
+}
+
+async function processOwnerQuickReply(msg) {
+    if (!msg?.key?.fromMe || !msg.message) {
+        return
+    }
+    const remoteJid = msg.key.remoteJid
+    if (!isIndividualJid(remoteJid)) return
+    const remoteJidLower = remoteJid.toLowerCase()
+    if (remoteJidLower.startsWith("status@broadcast")) {
+        return
+    }
+    const messageBody = msg.message.conversation || msg.message.extendedTextMessage?.text || ""
+    const trimmed = (messageBody || "").trim()
+    if (!trimmed) return
+
+    if (db) {
+        try {
+            const metadata = JSON.stringify({ source: "owner" })
+            await db.saveMessage(INSTANCE_ID, remoteJid, "user", trimmed, "outbound", metadata)
+        } catch (err) {
+            log("Error saving owner outbound message:", err.message)
+        }
+    }
+
+    const secretaryConfig = await loadSecretaryConfig()
+    if (!secretaryConfig.enabled) return
+    const reply = pickSecretaryTermResponse(trimmed, secretaryConfig)
+    if (reply) {
+        await sendSecretaryReply(remoteJid, reply, "term")
+    }
+}
+
 async function generateGeminiResponse(aiConfig, remoteJid, messageBody) {
     const historyRows = await fetchHistoryRows(remoteJid, aiConfig.history_limit)
     const trimmedMessage = (messageBody || "").trim()
@@ -1550,26 +2161,130 @@ async function generateGeminiMultimodalResponse(aiConfig, remoteJid, prompt, fil
     return { text }
 }
 
+async function handleMultimodalMedia(remoteJid, aiConfig, mediaEntries, promptText) {
+    const tempPaths = []
+    try {
+        for (const entry of mediaEntries) {
+            const payload = entry?.mediaPayload
+            const message = entry?.message
+            if (!payload || !message) {
+                throw new Error("Entrada multimídia inválida")
+            }
+            const tempPath = await downloadMediaNodeToTemp(message, payload.node, payload.downloadType)
+            tempPaths.push(tempPath)
+        }
+    } catch (downloadError) {
+        log("Erro ao baixar mídia multimídia:", downloadError.message)
+        if (sock) {
+            const fallbackText = "Erro ao baixar a mídia para análise"
+            const metadata = JSON.stringify({
+                debug: true,
+                severity: "error",
+                error: downloadError?.message || "Falha desconhecida no download",
+                user_message: fallbackText
+            })
+            try {
+                await sendWhatsAppMessage(remoteJid, { text: fallbackText })
+            } catch (uiError) {
+                log("Erro ao notificar usuário sobre falha no download:", uiError.message)
+            }
+            if (db) {
+                try {
+                    await db.saveMessage(INSTANCE_ID, remoteJid, "assistant", fallbackText, "outbound", metadata)
+                } catch (saveError) {
+                    log("Erro salvando mensagem de erro no banco:", saveError.message)
+                }
+            }
+        }
+        return
+    }
+
+    try {
+        const response = await generateGeminiMultimodalResponse(aiConfig, remoteJid, promptText, tempPaths)
+        const finalText = (response.text || "").trim()
+        if (!finalText) {
+            throw new Error("Resposta multimídia inválida")
+        }
+
+        const COMMAND_SEPARATOR = "&&&"
+        const sanitizedMultimodalText = finalText.includes(COMMAND_SEPARATOR)
+            ? finalText.split(COMMAND_SEPARATOR)[0].trim()
+            : finalText
+        const segments = sanitizedMultimodalText
+            .split("#")
+            .map(part => part.trim())
+            .filter(Boolean)
+        if (!segments.length) {
+            log("multimodal dispatch dropped", {
+                remoteJid,
+                reason: "Nenhum texto visível após remover comandos"
+            })
+            throw new Error("IA retornou apenas comandos em resposta multimídia")
+        }
+
+        if (!sock) {
+            throw new Error("WhatsApp não conectado")
+        }
+
+        for (const segment of segments) {
+            await sendWhatsAppMessage(remoteJid, { text: segment })
+        }
+        if (db) {
+            try {
+                await db.saveMessage(INSTANCE_ID, remoteJid, "assistant", sanitizedMultimodalText, "outbound")
+            } catch (err) {
+                log("Error saving assistant message:", err.message)
+            }
+        }
+    } finally {
+        for (const filePath of tempPaths) {
+            if (filePath && fs.existsSync(filePath)) {
+                try {
+                    fs.unlinkSync(filePath)
+                } catch (err) {
+                    log("Erro limpando arquivo temporário:", err.message)
+                }
+            }
+        }
+    }
+}
+
+async function transcribeAudioWithGemini(transcriptionConfig, filePath) {
+    if (!transcriptionConfig?.gemini_api_key) {
+        throw new Error("Chave Gemini não configurada para transcrição de áudio")
+    }
+    const instruction = "Transcreva o áudio em português do Brasil. Responda apenas com o texto transcrito, sem aspas nem comentários."
+    const parts = [fileToGenerativePart(filePath)]
+    const text = await callGeminiContent({
+        gemini_api_key: transcriptionConfig.gemini_api_key,
+        gemini_instruction: instruction,
+        injected_context: ""
+    }, parts)
+    return (text || "").trim()
+}
+
 async function generateAIResponse(remoteJid, messageBody, providedConfig = null) {
     const aiConfig = providedConfig || await loadAIConfig()
     if (!aiConfig.enabled) {
         throw new Error("Respostas automáticas estão desabilitadas")
     }
+    const injectedContext = await buildInjectedPromptContext(remoteJid)
+    const enrichedConfig = { ...aiConfig, injected_context: injectedContext }
 
     log("generateAIResponse", {
         remoteJid,
-        provider: aiConfig.provider,
-        model: aiConfig.model,
-        historyLimit: aiConfig.history_limit,
+        provider: enrichedConfig.provider,
+        model: enrichedConfig.model,
+        historyLimit: enrichedConfig.history_limit,
         snippet: snippet(messageBody, 120)
     })
 
-    if (aiConfig.provider === "gemini") {
-        const response = await generateGeminiResponse(aiConfig, remoteJid, messageBody)
+    if (enrichedConfig.provider === "gemini") {
+        const response = await generateGeminiResponse(enrichedConfig, remoteJid, messageBody)
         return { ...response, provider: "gemini" }
     }
 
-    const response = await generateOpenAIResponse(aiConfig, remoteJid, messageBody)
+    const response = await generateOpenAIResponse(enrichedConfig, remoteJid, messageBody)
     return { ...response, provider: "openai" }
 }
 
@@ -1578,6 +2293,11 @@ async function dispatchAIResponse(remoteJid, messageBody, providedConfig = null,
         throw new Error("Mensagem vazia para IA")
     }
 
+    log("flow.ai.request", {
+        remoteJid,
+        provider: providedConfig?.provider || DEFAULT_PROVIDER,
+        inputLength: messageBody.length
+    })
     const aiResponse = await generateAIResponse(remoteJid, messageBody, providedConfig)
     const aiText = aiResponse.text?.trim()
     if (!aiText) {
@@ -1615,7 +2335,35 @@ async function dispatchAIResponse(remoteJid, messageBody, providedConfig = null,
         throw new Error("IA retornou apenas comandos; nenhum texto visível foi definido")
     }
 
-    const sanitizedOutputText = stripBeforeSeparator(outputText || finalBaseText)
+    const sanitizeMediaSeparators = (value) => {
+        if (!value) return value
+        const text = String(value)
+        const regex = /(video|img|audio):[^#\r\n]+/gi
+        let result = ""
+        let lastIndex = 0
+        let match
+        while ((match = regex.exec(text)) !== null) {
+            const start = match.index
+            const end = start + match[0].length
+            const before = start > 0 ? text[start - 1] : ""
+            const after = end < text.length ? text[end] : ""
+            const needsBefore = start === 0 || before !== "#"
+            const needsAfter = end === text.length || after !== "#"
+            result += text.slice(lastIndex, start)
+            if (needsBefore) {
+                result += "# "
+            }
+            result += match[0]
+            if (needsAfter) {
+                result += " #"
+            }
+            lastIndex = end
+        }
+        result += text.slice(lastIndex)
+        return result
+    }
+
+    const sanitizedOutputText = sanitizeMediaSeparators(stripBeforeSeparator(outputText || finalBaseText))
     const segments = sanitizedOutputText
         .split("#")
         .map(part => part.trim())
@@ -1633,13 +2381,180 @@ async function dispatchAIResponse(remoteJid, messageBody, providedConfig = null,
     }
 
     const metadata = commands?.length ? JSON.stringify({ commands }) : undefined
+    log("flow.ai.response", {
+        remoteJid,
+        provider: aiResponse.provider,
+        outputLength: sanitizedAiText.length,
+        commands: commands?.length || 0
+    })
 
-    for (const [index, segment] of preparedSegments.entries()) {
-        await sock.sendMessage(remoteJid, { text: segment })
+    const segmentActions = preparedSegments.map(segment => {
+        const contactDirective = parseContactSegment(segment)
+        if (contactDirective) {
+            return {
+                type: "contact",
+                raw: segment,
+                contact: contactDirective
+            }
+        }
+        const audioDirective = parseAudioSegment(segment)
+        if (audioDirective) {
+            return {
+                type: "audio",
+                raw: segment,
+                url: audioDirective.url,
+                caption: audioDirective.caption
+            }
+        }
+        const videoDirective = parseVideoSegment(segment)
+        if (videoDirective) {
+            return {
+                type: "video",
+                raw: segment,
+                url: videoDirective.url,
+                caption: videoDirective.caption
+            }
+        }
+        const imageDirective = parseImageSegment(segment)
+        if (imageDirective) {
+            return {
+                type: "image",
+                raw: segment,
+                url: imageDirective.url,
+                caption: imageDirective.caption
+            }
+        }
+        return {
+            type: "text",
+            raw: segment
+        }
+    })
+
+    for (const [index, action] of segmentActions.entries()) {
+        const segmentMetadata = index === 0 ? metadata : undefined
+        if (action.type === "audio") {
+            try {
+                const { buffer, mimeType } = await downloadAudioPayload(action.url)
+                const payload = {
+                    audio: buffer,
+                    mimetype: mimeType,
+                    ptt: false
+                }
+                await sendWhatsAppMessage(remoteJid, payload)
+            } catch (err) {
+                log("dispatchAIResponse audio send failed", {
+                    remoteJid,
+                    url: action.url,
+                    error: err.message
+                })
+                if (isSilentMediaError(err)) {
+                    await recordMediaAdminError(remoteJid, "audio", action.url, err)
+                } else {
+                    await sendWhatsAppMessage(remoteJid, {
+                        text: `Áudio não pôde ser enviado: ${action.url}`
+                    })
+                }
+            }
+        } else if (action.type === "video") {
+            try {
+                const { buffer, mimeType } = await downloadVideoPayload(action.url)
+                const payload = {
+                    video: buffer,
+                    mimetype: mimeType
+                }
+                if (action.caption) {
+                    payload.caption = action.caption
+                }
+                await sendWhatsAppMessage(remoteJid, payload)
+            } catch (err) {
+                log("dispatchAIResponse video send failed", {
+                    remoteJid,
+                    url: action.url,
+                    error: err.message
+                })
+                if (isSilentMediaError(err)) {
+                    await recordMediaAdminError(remoteJid, "video", action.url, err)
+                } else {
+                    await sendWhatsAppMessage(remoteJid, {
+                        text: `Vídeo não pôde ser enviado: ${action.url}`
+                    })
+                }
+            }
+        } else if (action.type === "image") {
+            try {
+                const { buffer, mimeType } = await downloadImagePayload(action.url)
+                const payload = {
+                    image: buffer,
+                    mimetype: mimeType
+                }
+                if (action.caption) {
+                    payload.caption = action.caption
+                }
+                await sendWhatsAppMessage(remoteJid, payload)
+            } catch (err) {
+                log("dispatchAIResponse image send failed", {
+                    remoteJid,
+                    url: action.url,
+                    error: err.message
+                })
+                if (isSilentMediaError(err)) {
+                    await recordMediaAdminError(remoteJid, "image", action.url, err)
+                } else {
+                    await sendWhatsAppMessage(remoteJid, {
+                        text: `Imagem não pôde ser enviada: ${action.url}`
+                    })
+                }
+            }
+        } else if (action.type === "contact") {
+            const contactInfo = action.contact
+            const contactDisplayName = (contactInfo.displayName && contactInfo.displayName.trim()) || formatContactPhoneLabel(contactInfo.phone) || contactInfo.phone
+            const sanitizedName = contactDisplayName.replace(/\r?\n/g, " ").trim() || "Contato"
+            const note = contactInfo.note ? contactInfo.note.replace(/\r?\n/g, " ").trim() : null
+            const phone = contactInfo.phone
+            const vcardLines = [
+                "BEGIN:VCARD",
+                "VERSION:3.0",
+                `FN:${sanitizedName}`,
+                `TEL;type=CELL;waid=${phone}:${phone}`
+            ]
+            if (note) {
+                vcardLines.push(`NOTE:${note}`)
+            }
+            vcardLines.push("END:VCARD")
+            try {
+                await sendWhatsAppMessage(remoteJid, {
+                    contacts: {
+                        displayName: sanitizedName,
+                        contacts: [
+                            {
+                                vcard: vcardLines.join("\n")
+                            }
+                        ]
+                    }
+                })
+            } catch (err) {
+                log("dispatchAIResponse contact send failed", {
+                    remoteJid,
+                    contact: sanitizedName,
+                    error: err.message
+                })
+                await sendWhatsAppMessage(remoteJid, {
+                    text: `Contato não pôde ser enviado: ${contactInfo.phone}`
+                })
+            }
+        } else {
+            await sendWhatsAppMessage(remoteJid, { text: action.raw })
+        }
+
         if (db) {
             try {
-                const segmentMetadata = index === 0 ? metadata : undefined
-                await db.saveMessage(INSTANCE_ID, remoteJid, "assistant", segment, "outbound", segmentMetadata)
+                await db.saveMessage(INSTANCE_ID, remoteJid, "assistant", action.raw, "outbound", segmentMetadata)
+                log("flow.persist", {
+                    remoteJid,
+                    role: "assistant",
+                    direction: "outbound",
+                    length: action.raw?.length || 0
+                })
             } catch (err) {
                 log("Error saving assistant message:", err.message)
             }
@@ -1666,6 +2581,15 @@ function detectMediaPayload(message) {
             fallbackDescription: "Imagem recebida sem legenda."
         }
     }
+    if (message.videoMessage) {
+        return {
+            key: "videoMessage",
+            node: message.videoMessage,
+            type: "vídeo",
+            downloadType: "video",
+            fallbackDescription: "Vídeo recebido sem legenda."
+        }
+    }
     if (message.audioMessage) {
         return {
             key: "audioMessage",
@@ -1681,6 +2605,345 @@ function detectMediaPayload(message) {
 function sanitizeMimeType(value) {
     if (!value) return null
     return value.split(";")[0].trim().toLowerCase() || null
+}
+
+function getRemoteCacheKey(url) {
+    const encoded = Buffer.from(url, "utf8").toString("base64")
+    return encoded.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+}
+
+function getRemoteCachePaths(url) {
+    const key = getRemoteCacheKey(url)
+    return {
+        filePath: path.join(REMOTE_CACHE_DIR, `${key}.bin`),
+        metaPath: path.join(REMOTE_CACHE_DIR, `${key}.json`)
+    }
+}
+
+async function loadRemoteCache(url, expectedPrefix, fallbackMime) {
+    const { filePath, metaPath } = getRemoteCachePaths(url)
+    if (!fs.existsSync(filePath) || !fs.existsSync(metaPath)) {
+        return null
+    }
+    const rawMeta = await fs.promises.readFile(metaPath, "utf8").catch(() => "")
+    if (!rawMeta) return null
+    let meta
+    try {
+        meta = JSON.parse(rawMeta)
+    } catch {
+        return null
+    }
+    const mimeType = sanitizeMimeType(meta?.mimeType) || fallbackMime
+    if (!mimeType || !mimeType.startsWith(expectedPrefix)) {
+        return null
+    }
+    const buffer = await fs.promises.readFile(filePath)
+    return { buffer, mimeType }
+}
+
+async function saveRemoteCache(url, buffer, mimeType) {
+    const { filePath, metaPath } = getRemoteCachePaths(url)
+    await fs.promises.writeFile(filePath, buffer)
+    const payload = {
+        url,
+        mimeType,
+        savedAt: new Date().toISOString()
+    }
+    await fs.promises.writeFile(metaPath, JSON.stringify(payload))
+}
+
+async function fetchMediaWithCache(url, expectedPrefix, fallbackMime, fetchLabel) {
+    const cached = await loadRemoteCache(url, expectedPrefix, fallbackMime)
+    if (cached) {
+        return cached
+    }
+    const response = await fetch(url, {
+        method: "GET",
+        headers: { "User-Agent": "Janeri Bot/1.0" }
+    })
+    if (!response.ok) {
+        throw new Error(`${fetchLabel} não pôde ser baixado (HTTP ${response.status})`)
+    }
+    const arrayBuffer = await response.arrayBuffer()
+    const buffer = Buffer.from(arrayBuffer)
+    const inferredMime = sanitizeMimeType(response.headers.get("content-type")) || sanitizeMimeType(mime.lookup(url))
+    const mimeType = inferredMime || fallbackMime
+    if (!mimeType || !mimeType.startsWith(expectedPrefix)) {
+        throw new Error(`Conteúdo baixado não parece ser ${fetchLabel.toLowerCase()}`)
+    }
+    await saveRemoteCache(url, buffer, mimeType).catch(err => {
+        log("Cache de mídia falhou:", { url, error: err.message })
+    })
+    return { buffer, mimeType }
+}
+
+function isLocalMediaPath(value) {
+    if (typeof value !== "string") return false
+    const trimmed = value.trim()
+    return trimmed.startsWith("/") || trimmed.startsWith("uploads/")
+}
+
+function resolveLocalAssetPath(inputPath) {
+    if (!inputPath || typeof inputPath !== "string") {
+        throw new Error("Caminho local inválido")
+    }
+    const trimmed = inputPath.trim()
+    const resolved = trimmed.startsWith("/")
+        ? path.resolve(trimmed)
+        : path.resolve(ASSETS_UPLOADS_DIR, trimmed.replace(/^uploads[\\/]+/i, ""))
+    const allowedBase = ASSETS_UPLOADS_DIR.endsWith(path.sep)
+        ? ASSETS_UPLOADS_DIR
+        : `${ASSETS_UPLOADS_DIR}${path.sep}`
+    if (resolved !== ASSETS_UPLOADS_DIR && !resolved.startsWith(allowedBase)) {
+        throw new Error("Caminho local fora do diretório permitido")
+    }
+    return resolved
+}
+
+async function loadLocalMediaBuffer(filePath, expectedPrefix, fallbackMime) {
+    const resolved = resolveLocalAssetPath(filePath)
+    if (!fs.existsSync(resolved)) {
+        const err = new Error("Arquivo local não encontrado")
+        err.silent = true
+        throw err
+    }
+    const buffer = await fs.promises.readFile(resolved)
+    const inferredMime = sanitizeMimeType(mime.lookup(resolved)) || fallbackMime
+    if (!inferredMime || !inferredMime.startsWith(expectedPrefix)) {
+        throw new Error("Arquivo local não corresponde ao tipo esperado")
+    }
+    return { buffer, mimeType: inferredMime }
+}
+
+function isSilentMediaError(error) {
+    return Boolean(error && error.silent)
+}
+
+async function recordMediaAdminError(remoteJid, actionType, url, error) {
+    if (!db) return
+    const label = actionType ? actionType.toUpperCase() : "MIDIA"
+    const message = `Falha ao enviar ${label}`
+    const metadata = {
+        severity: "error",
+        error: error?.message || "Falha ao enviar mídia",
+        media_type: actionType,
+        url
+    }
+    try {
+        await db.saveMessage(INSTANCE_ID, remoteJid, "assistant", message, "outbound", JSON.stringify(metadata))
+    } catch (err) {
+        log("Erro salvando alerta de mídia no admin:", err.message)
+    }
+}
+
+function parseImageSegment(segment) {
+    const trimmed = (segment || "").trim()
+    if (!trimmed) return null
+    if (!/^img:/i.test(trimmed)) return null
+    const payload = trimmed.slice(4).trim()
+    if (!payload) return null
+    const [urlPart, ...captionParts] = payload.split("|")
+    const url = (urlPart || "").trim()
+    if (!url) return null
+    if (!isLocalMediaPath(url)) {
+        try {
+            const parsed = new URL(url)
+            if (!["http:", "https:"].includes(parsed.protocol)) {
+                return null
+            }
+        } catch {
+            return null
+        }
+    }
+    const caption = captionParts.join("|").trim()
+    return {
+        url,
+        caption: caption || undefined
+    }
+}
+
+function parseAudioSegment(segment) {
+    const trimmed = (segment || "").trim()
+    if (!trimmed) return null
+    if (!/^audio:/i.test(trimmed)) return null
+    const payload = trimmed.slice(6).trim()
+    if (!payload) return null
+    const [urlPart, ...captionParts] = payload.split("|")
+    const url = (urlPart || "").trim()
+    if (!url) return null
+    if (!isLocalMediaPath(url)) {
+        try {
+            const parsed = new URL(url)
+            if (!["http:", "https:"].includes(parsed.protocol)) {
+                return null
+            }
+        } catch {
+            return null
+        }
+    }
+    const caption = captionParts.join("|").trim()
+    return {
+        url,
+        caption: caption || undefined
+    }
+}
+
+function parseVideoSegment(segment) {
+    const trimmed = (segment || "").trim()
+    if (!trimmed) return null
+    if (!/^video:/i.test(trimmed)) return null
+    const payload = trimmed.slice(6).trim()
+    if (!payload) return null
+    const [urlPart, ...captionParts] = payload.split("|")
+    const url = (urlPart || "").trim()
+    if (!url) return null
+    if (!isLocalMediaPath(url)) {
+        try {
+            const parsed = new URL(url)
+            if (!["http:", "https:"].includes(parsed.protocol)) {
+                return null
+            }
+        } catch {
+            return null
+        }
+    }
+    const caption = captionParts.join("|").trim()
+    return {
+        url,
+        caption: caption || undefined
+    }
+}
+
+function parseContactSegment(segment) {
+    const trimmed = (segment || "").trim()
+    if (!trimmed) return null
+    if (!/^contact:/i.test(trimmed)) return null
+    const payload = trimmed.slice(8).trim()
+    if (!payload) return null
+    const parts = payload.split("|").map(part => part.trim())
+    const rawPhone = parts[0] || ""
+    const normalizedPhone = normalizeContactPhoneNumber(rawPhone)
+    if (!normalizedPhone) return null
+    const displayName = parts[1] || undefined
+    const note = parts.slice(2).filter(Boolean).join(" | ") || undefined
+    return {
+        phone: normalizedPhone,
+        rawPhone,
+        displayName,
+        note
+    }
+}
+
+async function downloadImagePayload(url) {
+    if (!url) {
+        throw new Error("URL da imagem inválida")
+    }
+    if (isLocalMediaPath(url)) {
+        return loadLocalMediaBuffer(url, "image/", "image/jpeg")
+    }
+    return fetchMediaWithCache(url, "image/", "image/jpeg", "Imagem")
+}
+
+async function downloadAudioPayload(url) {
+    if (!url) {
+        throw new Error("URL do áudio inválida")
+    }
+    if (isLocalMediaPath(url)) {
+        return loadLocalMediaBuffer(url, "audio/", "audio/mpeg")
+    }
+    return fetchMediaWithCache(url, "audio/", "audio/mpeg", "Áudio")
+}
+
+async function downloadVideoPayload(url) {
+    if (!url) {
+        throw new Error("URL do vídeo inválida")
+    }
+    if (isLocalMediaPath(url)) {
+        return loadLocalMediaBuffer(url, "video/", "video/mp4")
+    }
+    return fetchMediaWithCache(url, "video/", "video/mp4", "Vídeo")
+}
+
+function normalizeContactPhoneNumber(value) {
+    if (!value) return null
+    const digits = String(value).replace(/\D/g, "")
+    if (!digits) return null
+    const normalized = ensureBrazilCountryCode(digits)
+    return normalized || null
+}
+
+function formatContactPhoneLabel(value) {
+    if (!value) return null
+    const trimmed = String(value).trim()
+    if (trimmed === "") return null
+    if (trimmed.startsWith("+")) return trimmed
+    return `+${trimmed}`
+}
+
+function extractPhonesFromVcard(vcard) {
+    if (!vcard) return []
+    const lines = vcard.split(/\r?\n/)
+    const phones = []
+    for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed.toUpperCase().startsWith("TEL")) continue
+        const parts = trimmed.split(":")
+        if (parts.length < 2) continue
+        const rawValue = parts.slice(1).join(":").trim()
+        const normalized = normalizeContactPhoneNumber(rawValue)
+        if (!normalized) continue
+        phones.push({
+            raw: rawValue,
+            normalized
+        })
+    }
+    return phones
+}
+
+function detectContactPayload(message) {
+    const contact = message?.contactMessage
+    if (!contact) return null
+    const displayName = normalizeMetaField(contact.displayName || contact.name || contact.notify)
+    const note = normalizeMetaField(contact.notify || contact.description)
+    const vcard = contact.vcard || ""
+    const phones = extractPhonesFromVcard(vcard)
+    if (!displayName && !phones.length && !vcard) {
+        return null
+    }
+    return {
+        displayName,
+        note,
+        vcard,
+        phones
+    }
+}
+
+function buildContactPrompt(payload) {
+    if (!payload) return ""
+    const lines = ["CONTATO RECEBIDO:"]
+    if (payload.displayName) {
+        lines.push(`Nome: ${payload.displayName}`)
+    }
+    if (payload.note) {
+        lines.push(`Descrição: ${payload.note}`)
+    }
+    if (payload.phones?.length) {
+        const formatted = payload.phones
+            .map(entry => formatContactPhoneLabel(entry.normalized) || entry.raw)
+            .filter(Boolean)
+        if (formatted.length) {
+            lines.push(`Telefone(s): ${formatted.join(", ")}`)
+        }
+    }
+    const summaryLines = (payload.vcard || "")
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(Boolean)
+        .slice(0, 4)
+    if (summaryLines.length) {
+        lines.push(`vCard: ${summaryLines.join(" | ")}`)
+    }
+    return lines.join("\n")
 }
 
 async function downloadMediaNodeToTemp(message, mediaNode, downloadType) {
@@ -1722,6 +2985,8 @@ async function downloadMediaNodeToTemp(message, mediaNode, downloadType) {
         fallbackExt = "ogg"
     } else if (downloadType === "image") {
         fallbackExt = "jpg"
+    } else if (downloadType === "video") {
+        fallbackExt = "mp4"
     }
 
     const extension = mime.extension(baseMime) || fallbackExt
@@ -1731,19 +2996,25 @@ async function downloadMediaNodeToTemp(message, mediaNode, downloadType) {
 }
 
 function handleMultiInputQueue(remoteJid, messageBody, delaySeconds) {
-    const trimmed = messageBody.trim()
-    if (!trimmed || delaySeconds <= 0) {
+    const entry = normalizeMultiInputEntry(messageBody)
+    if (!entry || delaySeconds <= 0) {
         return
     }
 
     const now = Date.now()
     const delayMs = delaySeconds * 1000
-    const expiresAt = now + delayMs
 
-    const existing = pendingMultiInputs.get(remoteJid) || { messages: [], timer: null, delaySeconds: 0, expiresAt: now }
-    existing.messages.push(trimmed)
+    const existing = pendingMultiInputs.get(remoteJid) || {
+        messages: [],
+        timer: null,
+        delaySeconds: 0,
+        expiresAt: now,
+        lastMessageAt: now
+    }
+    existing.messages.push(entry)
     existing.delaySeconds = delaySeconds
-    existing.expiresAt = expiresAt
+    existing.lastMessageAt = now
+    existing.expiresAt = now + delayMs
 
     if (existing.timer) {
         clearTimeout(existing.timer)
@@ -1751,17 +3022,82 @@ function handleMultiInputQueue(remoteJid, messageBody, delaySeconds) {
 
     existing.timer = setTimeout(() => {
         pendingMultiInputs.delete(remoteJid)
-        const aggregated = existing.messages.filter(Boolean).join("\n")
-        if (!aggregated) {
+        const entries = existing.messages.filter(Boolean)
+        if (!entries.length) {
             return
         }
-
-        dispatchAIResponse(remoteJid, aggregated)
+        processQueuedMultiInput(remoteJid, entries)
             .catch(err => handleAIError(remoteJid, err))
     }, delayMs)
 
     pendingMultiInputs.set(remoteJid, existing)
+    log("flow.queue.add", {
+        remoteJid,
+        delaySeconds,
+        total: existing.messages.length
+    })
     log(`[multi-input] aguardando ${delaySeconds}s para ${remoteJid} (${existing.messages.length} mensagem(ns))`)
+}
+
+function normalizeMultiInputEntry(entry) {
+    if (!entry) return null
+    if (typeof entry === "string") {
+        const trimmed = entry.trim()
+        if (!trimmed) return null
+        return { type: "text", text: trimmed }
+    }
+    if (entry.type === "text") {
+        const trimmed = (entry.text || "").trim()
+        return trimmed ? { type: "text", text: trimmed } : null
+    }
+    if (entry.type === "media" && entry.message && entry.mediaPayload) {
+        return entry
+    }
+    return null
+}
+
+async function processQueuedMultiInput(remoteJid, entries) {
+    const textEntries = entries.filter(entry => entry?.type === "text")
+    const mediaEntries = entries.filter(entry => entry?.type === "media")
+    log("flow.queue.flush", {
+        remoteJid,
+        textCount: textEntries.length,
+        mediaCount: mediaEntries.length
+    })
+    if (mediaEntries.length) {
+        const aiConfig = await loadAIConfig()
+        if (!aiConfig.enabled) {
+            return
+        }
+        const rawProvider = (aiConfig.provider || "").trim()
+        const normalizedProvider = rawProvider.toLowerCase()
+        const hasGeminiKey = Boolean(aiConfig.gemini_api_key)
+        const canUseGemini = normalizedProvider === "gemini" || hasGeminiKey
+
+        if (!canUseGemini) {
+            if (sock) {
+                await sendWhatsAppMessage(remoteJid, {
+                    text: "Multimídia só está disponível quando o Gemini é o provedor ativo."
+                })
+            }
+            return
+        }
+
+        const promptText = buildMediaPromptText(mediaEntries, textEntries)
+        await handleMultimodalMedia(remoteJid, aiConfig, mediaEntries, promptText)
+        return
+    }
+
+    const aggregated = textEntries
+        .map(entry => entry.text || "")
+        .map(text => text.trim())
+        .filter(Boolean)
+        .join("\n")
+    if (!aggregated) {
+        return
+    }
+
+    await dispatchAIResponse(remoteJid, aggregated)
 }
 
 async function handleAIError(remoteJid, error) {
@@ -1771,7 +3107,7 @@ async function handleAIError(remoteJid, error) {
     }
     try {
         const fallbackText = pickRandomErrorResponse()
-        await sock.sendMessage(remoteJid, { text: fallbackText })
+        await sendWhatsAppMessage(remoteJid, { text: fallbackText })
         if (db) {
             const meta = { debug: true, error: String(error?.message || error || "Erro desconhecido") }
             try {
@@ -1830,6 +3166,83 @@ async function loadAIConfig() {
     }
 }
 
+async function loadAudioTranscriptionConfig() {
+    if (!db) {
+        return {
+            enabled: false,
+            gemini_api_key: "",
+            prefix: DEFAULT_AUDIO_TRANSCRIPTION_PREFIX
+        }
+    }
+
+    const instanceSettings = await db.getSettings(INSTANCE_ID, AUDIO_TRANSCRIPTION_SETTING_KEYS)
+    const globalSettings = await db.getSettings('', AUDIO_TRANSCRIPTION_SETTING_KEYS)
+    const settings = { ...globalSettings, ...instanceSettings }
+    const rawPrefix = (settings.audio_transcription_prefix || "").trim()
+
+    return {
+        enabled: settings.audio_transcription_enabled === "true",
+        gemini_api_key: settings.audio_transcription_gemini_api_key || "",
+        prefix: rawPrefix || DEFAULT_AUDIO_TRANSCRIPTION_PREFIX
+    }
+}
+
+async function loadSecretaryConfig() {
+    if (!db) {
+        return {
+            enabled: false,
+            idle_hours: 0,
+            initial_response: "",
+            term_1: "",
+            response_1: "",
+            term_2: "",
+            response_2: "",
+            quick_replies: []
+        }
+    }
+
+    const instanceSettings = await db.getSettings(INSTANCE_ID, SECRETARY_SETTING_KEYS)
+    const globalSettings = await db.getSettings("", SECRETARY_SETTING_KEYS)
+    const settings = { ...globalSettings, ...instanceSettings }
+    const idleHours = Math.max(0, toNumber(settings.secretary_idle_hours, 0))
+    let quickReplies = []
+    if (settings.secretary_quick_replies) {
+        try {
+            const decoded = JSON.parse(settings.secretary_quick_replies)
+            if (Array.isArray(decoded)) {
+                quickReplies = decoded
+            }
+        } catch (err) {
+            log("Erro ao parsear respostas rápidas:", err.message)
+        }
+    }
+    if (!quickReplies.length) {
+        const fallback = []
+        const term1 = (settings.secretary_term_1 || "").trim()
+        const response1 = (settings.secretary_response_1 || "").trim()
+        if (term1 && response1) {
+            fallback.push({ term: term1, response: response1 })
+        }
+        const term2 = (settings.secretary_term_2 || "").trim()
+        const response2 = (settings.secretary_response_2 || "").trim()
+        if (term2 && response2) {
+            fallback.push({ term: term2, response: response2 })
+        }
+        quickReplies = fallback
+    }
+
+    return {
+        enabled: settings.secretary_enabled === "true",
+        idle_hours: idleHours,
+        initial_response: settings.secretary_initial_response || "",
+        term_1: settings.secretary_term_1 || "",
+        response_1: settings.secretary_response_1 || "",
+        term_2: settings.secretary_term_2 || "",
+        response_2: settings.secretary_response_2 || "",
+        quick_replies: quickReplies
+    }
+}
+
 async function persistAIConfig(payload) {
     if (!db) {
         throw new Error("Database not available")
@@ -1876,6 +3289,280 @@ async function persistAIConfig(payload) {
 
     for (const [key, value] of entries) {
         await db.setSetting(INSTANCE_ID, key, value)
+    }
+}
+
+function normalizeAlarmBoolean(value) {
+    if (typeof value !== "string" && typeof value !== "number") {
+        return false
+    }
+    const normalized = String(value || "").trim().toLowerCase()
+    return ["1", "true", "yes", "on"].includes(normalized)
+}
+
+function normalizeAlarmRecipients(value) {
+    if (!value) return []
+    const parts = String(value).split(/[\s,;]+/).map(part => part.trim()).filter(Boolean)
+    const unique = []
+    for (const part of parts) {
+        const candidate = part.toLowerCase()
+        if (!/^.+@.+\..+$/.test(candidate)) {
+            continue
+        }
+        if (!unique.includes(candidate)) {
+            unique.push(candidate)
+        }
+    }
+    return unique
+}
+
+function normalizeAlarmInterval(value, unit) {
+    const num = Number(value)
+    if (!Number.isFinite(num) || num <= 0) {
+        return 120
+    }
+    const normalizedUnit = String(unit || "").trim().toLowerCase()
+    if (normalizedUnit === "minutes" || normalizedUnit === "min") {
+        return Math.min(1440, Math.max(1, Math.floor(num)))
+    }
+    if (num === 2 || num === 24) {
+        return num * 60
+    }
+    return Math.min(1440, Math.max(1, Math.floor(num)))
+}
+
+function buildAlarmConfig(settings) {
+    const events = ["whatsapp", "server", "error"]
+    const payload = {}
+    for (const event of events) {
+        const prefix = `alarm_${event}_`
+        const unit = settings[`${prefix}interval_unit`]
+        payload[event] = {
+            enabled: normalizeAlarmBoolean(settings[`${prefix}enabled`]),
+            recipients: normalizeAlarmRecipients(settings[`${prefix}recipients`]),
+            interval: normalizeAlarmInterval(settings[`${prefix}interval`], unit),
+            intervalUnit: unit || "minutes",
+            lastSent: settings[`${prefix}last_sent`] || "",
+            lastSentKey: `${prefix}last_sent`
+        }
+    }
+    return payload
+}
+
+async function loadAlarmConfig() {
+    if (!db) {
+        return buildAlarmConfig({})
+    }
+    const instanceSettings = await db.getSettings(INSTANCE_ID, ALARM_SETTING_KEYS)
+    const globalSettings = await db.getSettings("", ALARM_SETTING_KEYS)
+    return buildAlarmConfig({ ...globalSettings, ...instanceSettings })
+}
+
+function shouldSendAlarm(meta) {
+    if (!meta) return false
+    if (!meta.enabled) return false
+    if (!meta.recipients.length) return false
+    if (!meta.lastSent) {
+        return true
+    }
+    const lastStamp = Date.parse(meta.lastSent)
+    if (Number.isNaN(lastStamp)) {
+        return true
+    }
+    const intervalMs = Math.max(1, meta.interval || 120) * 60 * 1000
+    return (Date.now() - lastStamp) >= intervalMs
+}
+
+async function persistAlarmLastSent(key) {
+    if (!db || !key) return
+    try {
+        await db.setSetting(INSTANCE_ID, key, new Date().toISOString())
+    } catch (err) {
+        log("Erro ao registrar alarme:", err.message)
+    }
+}
+
+async function clearAlarmLastSent(eventKey) {
+    if (!db || !eventKey) return
+    try {
+        const config = await loadAlarmConfig()
+        const meta = config[eventKey]
+        if (!meta?.lastSentKey) return
+        await db.setSetting(INSTANCE_ID, meta.lastSentKey, "")
+    } catch (err) {
+        log("Erro ao limpar alarme:", eventKey, err.message)
+    }
+}
+
+const pendingAlarmTimers = new Map()
+
+function clearPendingAlarm(eventKey) {
+    const timer = pendingAlarmTimers.get(eventKey)
+    if (timer) {
+        clearTimeout(timer)
+        pendingAlarmTimers.delete(eventKey)
+    }
+}
+
+function scheduleAlarm(eventKey, subject, body, delayMs) {
+    clearPendingAlarm(eventKey)
+    const waitMs = Math.max(0, Number(delayMs || 0))
+    const timer = setTimeout(async () => {
+        pendingAlarmTimers.delete(eventKey)
+        if (eventKey === "whatsapp" && (whatsappConnected || connectionStatus === "connected")) {
+            log("Alarme whatsapp ignorado: reconectou antes da confirmação.")
+            return
+        }
+        await triggerInstanceAlarm(eventKey, subject, body)
+    }, waitMs)
+    pendingAlarmTimers.set(eventKey, timer)
+}
+
+function buildAlarmDebugContext(eventKey, meta) {
+    const info = collectAlarmDebugInfo(eventKey, meta)
+    const lines = [
+        `Instância: ${info.instanceName}`,
+        `ID: ${info.instanceId}`,
+        `Evento: ${info.eventKey}`,
+        `Porta: ${info.port}`,
+        `Detectado em: ${info.detectedAt}`,
+        `Conexão WhatsApp: ${info.connectionStatus}`,
+        `WhatsApp conectado: ${info.whatsappConnected}`,
+        `Último erro: ${info.lastError}`,
+        `Processo: ${info.process}`,
+        `Node: ${info.node}`,
+        `Intervalo configurado: ${info.intervalLabel}`,
+        `Último envio: ${info.lastSent}`
+    ]
+    return "Detalhes adicionais:\n" + lines.map(line => `- ${line}`).join("\n")
+}
+
+function buildAlarmEmailHtml({ title, subtitle, info, message, qrLink, tokenExpiresAt }) {
+    const safeMessage = escapeHtml(message || "").replace(/\n/g, "<br>")
+    const infoRows = [
+        ["Instância", info.instanceName],
+        ["ID", info.instanceId],
+        ["Porta", info.port],
+        ["Status", info.connectionStatus],
+        ["WhatsApp conectado", info.whatsappConnected],
+        ["Último erro", info.lastError],
+        ["Detectado em", info.detectedAt]
+    ]
+    const extraRows = [
+        ["Host", info.process],
+        ["Node", info.node],
+        ["Intervalo", info.intervalLabel],
+        ["Último envio", info.lastSent]
+    ]
+    const qrBlock = qrLink
+        ? `
+            <tr>
+                <td style="padding: 0 0 8px 0; font-size: 14px; color: #123c3b; font-weight: 600;">
+                    Link para reconectar
+                </td>
+            </tr>
+            <tr>
+                <td style="padding: 0 0 18px 0;">
+                    <a href="${escapeHtml(qrLink)}" style="display: inline-block; background: #0f766e; color: #ffffff; text-decoration: none; padding: 12px 18px; border-radius: 10px; font-weight: 600; letter-spacing: 0.2px;">
+                        Abrir QR Code
+                    </a>
+                    <div style="margin-top: 10px; font-size: 12px; color: #45605f;">
+                        Token válido até ${escapeHtml(tokenExpiresAt || "24h")}.
+                    </div>
+                </td>
+            </tr>
+        `
+        : ""
+
+    const renderRows = rows => rows.map(([label, value]) => `
+        <tr>
+            <td style="padding: 8px 0; font-size: 13px; color: #4b615f; width: 160px;">${escapeHtml(label)}</td>
+            <td style="padding: 8px 0; font-size: 14px; color: #0f1f1e; font-weight: 600;">${escapeHtml(value || "-")}</td>
+        </tr>
+    `).join("")
+
+    return `
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${escapeHtml(title)}</title>
+</head>
+<body style="margin:0; padding:0; background:#f4f7f7; font-family: 'Segoe UI', 'Inter', Arial, sans-serif;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f4f7f7; padding: 32px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="680" cellspacing="0" cellpadding="0" style="background:#ffffff; border-radius: 18px; overflow: hidden; box-shadow: 0 18px 45px rgba(15, 118, 110, 0.12);">
+          <tr>
+            <td style="background: linear-gradient(120deg, #0f766e, #115e59); padding: 28px 36px; color:#ffffff;">
+              <img src="${escapeHtml(MAESTRO_LOGO_URL)}" alt="Maestro" style="height: 36px; display:block; margin-bottom: 14px;">
+              <div style="font-size: 20px; font-weight: 700; letter-spacing: 0.3px;">${escapeHtml(title)}</div>
+              <div style="margin-top: 6px; font-size: 14px; opacity: 0.9;">${escapeHtml(subtitle || "")}</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 28px 36px;">
+              <div style="font-size: 15px; color:#143533; line-height: 1.6; margin-bottom: 18px;">
+                ${safeMessage || "Um evento foi detectado na instância."}
+              </div>
+              ${qrBlock ? `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-bottom: 18px;">${qrBlock}</table>` : ""}
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-top: 1px solid #e3eceb; padding-top: 12px;">
+                ${renderRows(infoRows)}
+              </table>
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-top: 1px solid #e3eceb; margin-top: 12px; padding-top: 12px;">
+                ${renderRows(extraRows)}
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#f1f7f6; padding: 18px 36px; font-size: 12px; color:#6b7e7c;">
+              Este é um aviso automático do Maestro. Se precisar de suporte, responda este e-mail com o log ou o horário do incidente.
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+    `.trim()
+}
+
+async function triggerInstanceAlarm(eventKey, subject, body) {
+    if (!db) return
+    try {
+        const config = await loadAlarmConfig()
+        const meta = config[eventKey]
+        if (!shouldSendAlarm(meta)) {
+            return
+        }
+        const to = meta.recipients.join(", ")
+        const info = collectAlarmDebugInfo(eventKey, meta)
+        const detailedBody = [body?.trim(), buildAlarmDebugContext(eventKey, meta)]
+            .filter(Boolean)
+            .join("\n\n")
+        let qrToken = null
+        let qrLink = null
+        if (eventKey === "whatsapp") {
+            qrToken = generateQrAccessToken(INSTANCE_ID)
+            qrLink = `${PUBLIC_BASE_URL}/qr-proxy.php?token=${qrToken.token}`
+        }
+        const htmlBody = buildAlarmEmailHtml({
+            title: subject || "Alerta da instância",
+            subtitle: eventKey === "whatsapp"
+                ? "A conexão com o WhatsApp caiu e requer reconexão."
+                : "Um evento foi detectado na instância.",
+            info,
+            message: body,
+            qrLink,
+            tokenExpiresAt: qrToken?.expires_at
+        })
+        await sendMailCommand(to, subject, htmlBody, undefined, true)
+        await persistAlarmLastSent(meta.lastSentKey)
+        log("Alarme enviado", eventKey, "para", to)
+    } catch (err) {
+        log("Erro ao disparar alarme", eventKey, err.message)
     }
 }
 
@@ -1926,20 +3613,181 @@ async function processMessageWithAI(msg) {
             }
 
         const tempPaths = []
+        let contactPayload = null
         try {
+            const transcriptionConfig = await loadAudioTranscriptionConfig()
             const aiConfig = await loadAIConfig()
-            if (!aiConfig.enabled) {
+            const secretaryConfig = await loadSecretaryConfig()
+            let lastInboundAt = null
+            if (db && typeof db.getTimeSinceLastInboundMessage === "function") {
+                try {
+                    lastInboundAt = await db.getTimeSinceLastInboundMessage(INSTANCE_ID, remoteJid)
+                } catch (err) {
+                    log("Erro ao obter último inbound:", err.message)
+                }
+            }
+            const shouldSendSecretaryInitial = shouldTriggerSecretaryInitial(lastInboundAt, secretaryConfig)
+
+            const mediaPayload = detectMediaPayload(msg.message)
+            if (mediaPayload && mediaPayload.downloadType === "audio" && transcriptionConfig.enabled) {
+                const captionText = (mediaPayload.node?.caption || "").trim()
+                const inboundText = captionText ? `ÁUDIO RECEBIDO: ${captionText}` : "ÁUDIO RECEBIDO"
+                if (db) {
+                    try {
+                        await db.saveMessage(INSTANCE_ID, remoteJid, "user", inboundText, "inbound")
+                    } catch (err) {
+                        log("Error saving audio inbound message:", err.message)
+                    }
+                }
+
+                if (shouldSendSecretaryInitial) {
+                    await sendSecretaryReply(remoteJid, secretaryConfig.initial_response, "initial")
+                    return
+                }
+
+                if (!transcriptionConfig.gemini_api_key) {
+                    log("Transcrição de áudio ativada sem chave Gemini")
+                    return
+                }
+
+                let tempPath
+                try {
+                    tempPath = await downloadMediaNodeToTemp(msg, mediaPayload.node, mediaPayload.downloadType)
+                    tempPaths.push(tempPath)
+                } catch (downloadError) {
+                    log("Erro ao baixar áudio para transcrição:", downloadError.message)
+                    if (sock) {
+                        const fallbackText = "Erro ao baixar o áudio para transcrição."
+                        try {
+                            await sendWhatsAppMessage(remoteJid, { text: fallbackText })
+                        } catch (uiError) {
+                            log("Erro ao notificar usuário sobre falha no áudio:", uiError.message)
+                        }
+                        if (db) {
+                            try {
+                                await db.saveMessage(INSTANCE_ID, remoteJid, "assistant", fallbackText, "outbound")
+                            } catch (saveError) {
+                                log("Erro salvando mensagem de erro no banco:", saveError.message)
+                            }
+                        }
+                    }
+                    return
+                }
+
+                const transcriptText = await transcribeAudioWithGemini(transcriptionConfig, tempPath)
+                if (!transcriptText) {
+                    throw new Error("Transcrição vazia")
+                }
+
+                const prefix = (transcriptionConfig.prefix || DEFAULT_AUDIO_TRANSCRIPTION_PREFIX).trim()
+                const prefixText = prefix ? `${prefix}: ` : ""
+                const outgoingText = `${prefixText}_${transcriptText}_`
+                if (!sock) {
+                    throw new Error("WhatsApp não conectado")
+                }
+                await sendWhatsAppMessage(remoteJid, { text: outgoingText })
+                if (db) {
+                    try {
+                        await db.saveMessage(INSTANCE_ID, remoteJid, "assistant", outgoingText, "outbound")
+                    } catch (err) {
+                        log("Error saving audio transcription message:", err.message)
+                    }
+                }
                 return
             }
 
+            const aiEnabled = aiConfig.enabled
             const rawProvider = (aiConfig.provider || "").trim()
             console.log("Provider atual:", rawProvider || "não informado")
             const normalizedProvider = rawProvider.toLowerCase()
             const hasGeminiKey = Boolean(aiConfig.gemini_api_key)
             const canUseGemini = normalizedProvider === "gemini" || hasGeminiKey
+            const delaySeconds = Math.max(0, aiConfig.multi_input_delay ?? DEFAULT_MULTI_INPUT_DELAY)
+            contactPayload = detectContactPayload(msg.message)
+            log("flow.inbound", {
+                remoteJid,
+                hasMedia: Boolean(mediaPayload),
+                hasContact: Boolean(contactPayload),
+                aiEnabled,
+                delaySeconds
+            })
+            if (contactPayload) {
+                const promptText = buildContactPrompt(contactPayload)
+                if (!promptText) {
+                    log("processMessageWithAI", {
+                        remoteJid,
+                        snippet: "Contato sem dados visíveis"
+                    })
+                    return
+                }
+                if (db) {
+                    try {
+                        await db.saveMessage(INSTANCE_ID, remoteJid, "user", promptText, "inbound")
+                        log("flow.persist", {
+                            remoteJid,
+                            role: "user",
+                            direction: "inbound",
+                            length: promptText.length
+                        })
+                    } catch (err) {
+                        log("Error saving user contact message:", err.message)
+                    }
+                }
+                if (shouldSendSecretaryInitial) {
+                    await sendSecretaryReply(remoteJid, secretaryConfig.initial_response, "initial")
+                    return
+                }
+                if (!aiEnabled) {
+                    return
+                }
+                log("processMessageWithAI contact", {
+                    remoteJid,
+                    snippet: snippet(promptText, 120)
+                })
+                await dispatchAIResponse(remoteJid, promptText, aiConfig)
+                return
+            }
 
-            const mediaPayload = detectMediaPayload(msg.message)
+            if (mediaPayload && mediaPayload.downloadType === "video") {
+                const captionText = (mediaPayload.node?.caption || "").trim()
+                const promptText = captionText
+                    ? `Recebemos um video|${captionText}`
+                    : "Recebemos um video"
+
+                if (db) {
+                    try {
+                        await db.saveMessage(INSTANCE_ID, remoteJid, "user", promptText, "inbound")
+                        log("flow.persist", {
+                            remoteJid,
+                            role: "user",
+                            direction: "inbound",
+                            length: promptText.length
+                        })
+                    } catch (err) {
+                        log("Error saving user video message:", err.message)
+                    }
+                }
+
+                if (shouldSendSecretaryInitial) {
+                    await sendSecretaryReply(remoteJid, secretaryConfig.initial_response, "initial")
+                    return
+                }
+
+                if (!aiEnabled) {
+                    return
+                }
+
+                if (delaySeconds > 0) {
+                    handleMultiInputQueue(remoteJid, { type: "text", text: promptText }, delaySeconds)
+                    return
+                }
+
+                await dispatchAIResponse(remoteJid, promptText, aiConfig)
+                return
+            }
+
             if (mediaPayload) {
+                const mediaEntry = { type: "media", message: msg, mediaPayload }
                 const captionText = (mediaPayload.node?.caption || "").trim()
                 const fallbackDesc = mediaPayload.fallbackDescription || ""
                 const description = captionText || fallbackDesc
@@ -1951,14 +3799,34 @@ async function processMessageWithAI(msg) {
                 if (db) {
                     try {
                         await db.saveMessage(INSTANCE_ID, remoteJid, "user", promptText, "inbound")
+                        log("flow.persist", {
+                            remoteJid,
+                            role: "user",
+                            direction: "inbound",
+                            length: promptText.length
+                        })
                     } catch (err) {
                         log("Error saving user message:", err.message)
                     }
                 }
 
+                if (shouldSendSecretaryInitial) {
+                    await sendSecretaryReply(remoteJid, secretaryConfig.initial_response, "initial")
+                    return
+                }
+
+                if (!aiEnabled) {
+                    return
+                }
+
+                if (delaySeconds > 0) {
+                    handleMultiInputQueue(remoteJid, mediaEntry, delaySeconds)
+                    return
+                }
+
                 if (!canUseGemini) {
                     try {
-                        await sock.sendMessage(remoteJid, {
+                        await sendWhatsAppMessage(remoteJid, {
                             text: "Multimídia só está disponível quando o Gemini é o provedor ativo."
                         })
                     } catch (err) {
@@ -1971,80 +3839,13 @@ async function processMessageWithAI(msg) {
                     log("Usando Gemini via chave configurada mesmo com provider padrão:", rawProvider || "não informado")
                 }
 
-                let tempPath
-                try {
-                    tempPath = await downloadMediaNodeToTemp(msg, mediaPayload.node, mediaPayload.downloadType)
-                    tempPaths.push(tempPath)
-                } catch (downloadError) {
-                    log("Erro ao baixar mídia multimídia:", downloadError.message)
-                    if (sock) {
-                        const fallbackText = "Erro ao baixar a mídia para análise"
-                        const metadata = JSON.stringify({
-                            debug: true,
-                            severity: "error",
-                            error: downloadError?.message || "Falha desconhecida no download",
-                            user_message: fallbackText
-                        })
-                        try {
-                            await sock.sendMessage(remoteJid, {
-                                text: fallbackText
-                            })
-                        } catch (uiError) {
-                            log("Erro ao notificar usuário sobre falha no download:", uiError.message)
-                        }
-                        if (db) {
-                            try {
-                                await db.saveMessage(INSTANCE_ID, remoteJid, "assistant", fallbackText, "outbound", metadata)
-                            } catch (saveError) {
-                                log("Erro salvando mensagem de erro no banco:", saveError.message)
-                            }
-                        }
-                    }
-                    return
-                }
-
                 log("processMessageWithAI multimodal", {
                     remoteJid,
                     type: mediaPayload.type,
                     snippet: snippet(promptText, 80)
                 })
 
-                const response = await generateGeminiMultimodalResponse(aiConfig, remoteJid, promptText, tempPaths)
-                const finalText = (response.text || "").trim()
-                if (!finalText) {
-                    throw new Error("Resposta multimídia inválida")
-                }
-
-                const COMMAND_SEPARATOR = "&&&"
-                const sanitizedMultimodalText = finalText.includes(COMMAND_SEPARATOR)
-                    ? finalText.split(COMMAND_SEPARATOR)[0].trim()
-                    : finalText
-                const segments = sanitizedMultimodalText
-                    .split("#")
-                    .map(part => part.trim())
-                    .filter(Boolean)
-                if (!segments.length) {
-                    log("multimodal dispatch dropped", {
-                        remoteJid,
-                        reason: "Nenhum texto visível após remover comandos"
-                    })
-                    throw new Error("IA retornou apenas comandos em resposta multimídia")
-                }
-
-                if (!sock) {
-                    throw new Error("WhatsApp não conectado")
-                }
-
-                for (const segment of segments) {
-                    await sock.sendMessage(remoteJid, { text: segment })
-                }
-                if (db) {
-                    try {
-                        await db.saveMessage(INSTANCE_ID, remoteJid, "assistant", sanitizedMultimodalText, "outbound")
-                    } catch (err) {
-                        log("Error saving assistant message:", err.message)
-                    }
-                }
+                await handleMultimodalMedia(remoteJid, aiConfig, [mediaEntry], promptText)
                 return
             }
 
@@ -2064,9 +3865,32 @@ async function processMessageWithAI(msg) {
             if (db) {
                 try {
                     await db.saveMessage(INSTANCE_ID, remoteJid, 'user', messageBody, 'inbound', inboundMetadata)
+                    log("flow.persist", {
+                        remoteJid,
+                        role: "user",
+                        direction: "inbound",
+                        length: messageBody.length
+                    })
                 } catch (err) {
                     log("Error saving user message:", err.message)
                 }
+            }
+
+            if (shouldSendSecretaryInitial) {
+                await sendSecretaryReply(remoteJid, secretaryConfig.initial_response, "initial")
+                return
+            }
+
+            if (secretaryConfig.enabled) {
+                const secretaryReply = pickSecretaryTermResponse(messageBody, secretaryConfig)
+                if (secretaryReply) {
+                    await sendSecretaryReply(remoteJid, secretaryReply, "term")
+                    return
+                }
+            }
+
+            if (!aiEnabled) {
+                return
             }
 
             if (isStatusBroadcast) {
@@ -2083,14 +3907,16 @@ async function processMessageWithAI(msg) {
                 snippet: snippet(messageBody, 120)
             })
 
-            const delaySeconds = Math.max(0, aiConfig.multi_input_delay ?? DEFAULT_MULTI_INPUT_DELAY)
             if (delaySeconds > 0) {
-                handleMultiInputQueue(remoteJid, messageBody, delaySeconds)
+                handleMultiInputQueue(remoteJid, { type: "text", text: messageBody }, delaySeconds)
                 return
             }
 
             try {
-                await dispatchAIResponse(remoteJid, messageBody, aiConfig)
+                if (aiEnabled) {
+                    log("flow.ai.dispatch", { remoteJid, provider: aiConfig.provider || DEFAULT_PROVIDER })
+                    await dispatchAIResponse(remoteJid, messageBody, aiConfig)
+                }
             } catch (aiError) {
                 await handleAIError(remoteJid, aiError)
             }
@@ -2160,6 +3986,7 @@ async function startWhatsApp() {
                 connectionStatus = "connected"
                 qrCodeData = null
                 lastConnectionError = null
+                clearPendingAlarm("whatsapp")
                 log("Conectado ao WhatsApp")
                 const connectedPhone = sock?.user?.id || sock?.user?.jid || sock?.user?.name
                 if (connectedPhone) {
@@ -2172,6 +3999,8 @@ async function startWhatsApp() {
                     hasQR: !!qrCodeData
                 })
                 persistInstanceStatus("connected", "connected")
+                void clearAlarmLastSent("whatsapp")
+                void clearAlarmLastSent("error")
             }
 
             if (connection === "close") {
@@ -2191,6 +4020,14 @@ async function startWhatsApp() {
                     lastConnectionError
                 })
                 persistInstanceStatus("disconnected", "disconnected")
+                scheduleAlarm(
+                    "whatsapp",
+                    `WhatsApp desconectado – instância ${INSTANCE_ID}`,
+                    `A conexão ao WhatsApp foi encerrada.\n` +
+                    `Motivo: ${lastConnectionError || "sem detalhe"}\n` +
+                    `Horário: ${new Date().toISOString()}`,
+                    WHATSAPP_ALARM_VERIFY_DELAY_MS
+                )
 
                 const shouldReconnect =
                     reason?.output?.statusCode !== DisconnectReason.loggedOut
@@ -2254,6 +4091,10 @@ async function startWhatsApp() {
 
                 // Process incoming messages with intelligent AI logic
                 for (const msg of msgs) {
+                    if (msg.key?.fromMe) {
+                        await processOwnerQuickReply(msg)
+                        continue
+                    }
                     await processMessageWithAI(msg)
                 }
             } catch (e) {
@@ -2273,6 +4114,13 @@ async function startWhatsApp() {
             lastConnectionError
         })
         persistInstanceStatus("error", "error")
+        await triggerInstanceAlarm(
+            "error",
+            `Erro crítico na instância ${INSTANCE_ID}`,
+            `Falha ao iniciar/operar: ${err.message}\n` +
+            `Stack: ${err.stack || "sem stack"}\n` +
+            `Horário: ${new Date().toISOString()}`
+        )
     }
 }
 
@@ -2401,24 +4249,34 @@ app.get("/api/chats/:instanceId", async (req, res) => {
 app.get("/api/messages/:instanceId/:remoteJid", async (req, res) => {
     try {
         const { instanceId, remoteJid } = req.params
-        const limit = parseInt(req.query.limit) || 50
-        const offset = parseInt(req.query.offset) || 0
+        const limitParam = parseInt(req.query.limit, 10)
+        const offsetParam = parseInt(req.query.offset, 10)
+        const limit = Number.isNaN(limitParam) ? 50 : limitParam
+        const offset = Number.isNaN(offsetParam) ? 0 : Math.max(0, offsetParam)
         
         if (!db) {
             return res.status(503).json({ error: "Database not available" })
         }
         
         const messages = await db.getMessages(instanceId, remoteJid, limit, offset)
+        let contactMeta = null
+        if (instanceId === INSTANCE_ID) {
+            await ensureContactMetadata(remoteJid)
+            if (db?.getContactMetadata) {
+                contactMeta = await db.getContactMetadata(instanceId, remoteJid)
+            }
+        }
         
         res.json({
             ok: true,
             instanceId,
             remoteJid,
             messages,
+            contact_meta: contactMeta,
             pagination: {
                 limit,
                 offset,
-                hasMore: messages.length === limit
+                hasMore: limit > 0 && messages.length === limit
             }
         })
     } catch (err) {
@@ -2445,6 +4303,31 @@ app.get("/api/scheduled/:instanceId/:remoteJid", async (req, res) => {
     } catch (err) {
         log("Error getting scheduled messages:", err.message)
         res.status(500).json({ error: "Failed to get scheduled messages", detail: err.message })
+    }
+})
+
+app.post("/api/scheduled/:instanceId", async (req, res) => {
+    try {
+        const { instanceId } = req.params
+        const { remote_jid: remoteJid, message, scheduled_at: scheduledAt, tag, tipo } = req.body || {}
+        if (!remoteJid || !message || !scheduledAt) {
+            return res.status(400).json({ ok: false, error: "remote_jid, message e scheduled_at são obrigatórios" })
+        }
+        const date = new Date(scheduledAt)
+        if (Number.isNaN(date.getTime())) {
+            return res.status(400).json({ ok: false, error: "scheduled_at inválido" })
+        }
+        const result = await db.enqueueScheduledMessage(instanceId, remoteJid, message, date, tag || "default", tipo || "followup")
+        res.json({
+            ok: true,
+            instanceId,
+            remoteJid,
+            scheduledId: result.scheduledId,
+            scheduledAt: result.scheduledAt
+        })
+    } catch (err) {
+        log("Error creating scheduled message:", err.message)
+        res.status(500).json({ ok: false, error: "Failed to create scheduled message", detail: err.message })
     }
 })
 
@@ -2481,7 +4364,8 @@ app.delete("/api/messages/:instanceId/:remoteJid", async (req, res) => {
 // GET /api/health - Database health and statistics
 function createMultiInputSnapshot(remoteJid, entry, now) {
     if (!entry) return null
-    const remainingMs = Math.max(0, (entry.expiresAt || 0) - now)
+    const fallbackExpiresAt = (entry.lastMessageAt || 0) + (entry.delaySeconds || 0) * 1000
+    const remainingMs = Math.max(0, (entry.expiresAt || fallbackExpiresAt || 0) - now)
     return {
         remote_jid: remoteJid,
         delay_seconds: entry.delaySeconds || 0,
@@ -2711,7 +4595,7 @@ app.post("/send-message", async (req, res) => {
             jid = digits + "@s.whatsapp.net"
         }
 
-        const result = await sock.sendMessage(jid, { text: message })
+        const result = await sendWhatsAppMessage(jid, { text: message })
         log("Mensagem enviada para", jid)
 
         // Save sent message to database
@@ -2730,8 +4614,19 @@ app.post("/send-message", async (req, res) => {
             result
         })
     } catch (err) {
-        log("Erro ao enviar mensagem:", err.message)
-        res.status(500).json({ error: "Falha ao enviar mensagem", detail: err.message })
+        const detail = err.message || "Falha ao enviar mensagem"
+        const normalized = detail.toLowerCase()
+        let status = 500
+        let error = "Falha ao enviar mensagem"
+        if (normalized.includes("número inválido")) {
+            status = 400
+            error = "Número inválido"
+        } else if (normalized.includes("não existe")) {
+            status = 404
+            error = "Número não existe no WhatsApp"
+        }
+        log("Erro ao enviar mensagem:", detail)
+        res.status(status).json({ error, detail })
     }
 })
 

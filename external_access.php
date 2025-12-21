@@ -6,6 +6,12 @@ require_once __DIR__ . '/external_auth.php';
 date_default_timezone_set('America/Fortaleza');
 session_start();
 
+$dashboardBaseUrl = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
+if ($dashboardBaseUrl === '') {
+    $dashboardBaseUrl = '/';
+}
+$dashboardLogoUrl = "{$dashboardBaseUrl}/assets/maestro-logo.png";
+
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
@@ -107,9 +113,14 @@ unset($userRow);
 <body>
   <div class="container">
     <div class="flex flex-wrap items-center justify-between gap-3">
-      <div>
-        <h1 class="mb-2 font-semibold text-slate-900">Gerenciar acessos externos</h1>
-        <p class="text-sm text-slate-500 mb-6">Crie e edite logins para operadores e gerentes associados às instâncias.</p>
+      <div class="flex items-center gap-3">
+        <a href="<?= htmlspecialchars($dashboardBaseUrl) ?>" class="inline-flex items-center gap-3">
+          <img src="<?= htmlspecialchars($dashboardLogoUrl) ?>" width="56" style="height:auto;" alt="Logomarca Maestro">
+        </a>
+        <div>
+          <h1 class="mb-2 font-semibold text-slate-900">Gerenciar acessos externos</h1>
+          <p class="text-sm text-slate-500 mb-6">Crie e edite logins para operadores e gerentes associados às instâncias.</p>
+        </div>
       </div>
       <a href="index.php" class="inline-flex items-center gap-2 rounded-2xl border border-slate-300 px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 transition">
         Voltar ao painel principal

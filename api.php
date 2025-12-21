@@ -13,6 +13,54 @@ require_once __DIR__ . '/instance_data.php';
 
 debug_log('api.php: Request received');
 
+function normalizeAlarmRecipientsForSave(string $raw): string
+{
+    return implode(',', parseEmailList($raw));
+}
+
+function normalizeAlarmIntervalValue($value, $unit = ''): string
+{
+    $interval = (int)($value ?? 0);
+    if ($interval <= 0) {
+        return '120';
+    }
+    $unit = strtolower(trim((string) $unit));
+    if ($unit === 'minutes' || $unit === 'min') {
+        $interval = max(1, min(1440, $interval));
+        return (string) $interval;
+    }
+    if ($interval === 2 || $interval === 24) {
+        return (string) ($interval * 60);
+    }
+    $interval = max(1, min(1440, $interval));
+    return (string) $interval;
+}
+
+function postInstanceSetting(string $port, string $instanceId, string $key, string $value): array
+{
+    $nodeUrl = "http://127.0.0.1:{$port}/api/settings/{$key}";
+    $query = http_build_query(['instance' => $instanceId]);
+    if ($query) {
+        $nodeUrl .= '?' . $query;
+    }
+    $ch = curl_init($nodeUrl);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, ["Content-Type: application/json"]);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(['value' => $value]));
+    curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+    $response = curl_exec($ch);
+    $error = curl_error($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    return [
+        'ok' => !$error && $httpCode >= 200 && $httpCode < 300,
+        'error' => $error ?: '',
+        'code' => $httpCode,
+        'response' => $response
+    ];
+}
+
 // ==================
 // Verificar API KEY
 // ==================
@@ -166,6 +214,168 @@ if (isset($payload['action'])) {
         $responsePayload = ['success' => true];
         if ($nodeSyncWarning) {
             $responsePayload['warning'] = $nodeSyncWarning;
+        }
+        die(json_encode($responsePayload));
+    }
+
+    if ($payload['action'] === 'save_audio_transcription_config') {
+        $audio = $payload['audio'] ?? [];
+        if (!is_array($audio)) {
+            http_response_code(400);
+            die(json_encode(["error" => "Invalid audio transcription configuration"]));
+        }
+
+        $enabled = (bool)($audio['enabled'] ?? false);
+        $geminiApiKey = trim($audio['gemini_api_key'] ?? '');
+        $prefix = trim($audio['prefix'] ?? '');
+        if ($prefix === '') {
+            $prefix = '🔊';
+        }
+
+        if ($enabled && !$geminiApiKey) {
+            http_response_code(400);
+            die(json_encode(["error" => "Gemini API key is required when enabling audio transcription"]));
+        }
+
+        $entries = [
+            'audio_transcription_enabled' => $enabled ? 'true' : 'false',
+            'audio_transcription_gemini_api_key' => $geminiApiKey,
+            'audio_transcription_prefix' => $prefix
+        ];
+
+        $warnings = [];
+        foreach ($entries as $key => $value) {
+            $result = postInstanceSetting((string)$port, (string)$instanceId, $key, (string)$value);
+            if (!$result['ok']) {
+                $details = $result['error'] ?: ($result['response'] ?: 'Falha desconhecida');
+                $warnings[] = "{$key} ({$result['code']}): {$details}";
+                debug_log("Audio transcription sync failed ({$key}): {$details}");
+            }
+        }
+
+        $responsePayload = ['success' => true];
+        if (!empty($warnings)) {
+            $responsePayload['warning'] = implode(' | ', $warnings);
+        }
+        die(json_encode($responsePayload));
+    }
+
+    if ($payload['action'] === 'save_secretary_config') {
+        $secretary = $payload['secretary'] ?? [];
+        if (!is_array($secretary)) {
+            http_response_code(400);
+            die(json_encode(["error" => "Invalid secretary configuration"]));
+        }
+
+        $enabled = (bool)($secretary['enabled'] ?? false);
+        $idleHours = max(0, (int)($secretary['idle_hours'] ?? 0));
+        $initialResponse = trim($secretary['initial_response'] ?? '');
+        $term1 = trim($secretary['term_1'] ?? '');
+        $response1 = trim($secretary['response_1'] ?? '');
+        $term2 = trim($secretary['term_2'] ?? '');
+        $response2 = trim($secretary['response_2'] ?? '');
+        $quickReplies = $secretary['quick_replies'] ?? [];
+
+        if ($enabled && $idleHours < 1) {
+            http_response_code(400);
+            die(json_encode(["error" => "Tempo sem contato deve ser pelo menos 1 hora"]));
+        }
+        if ($enabled && $initialResponse === '') {
+            http_response_code(400);
+            die(json_encode(["error" => "Resposta inicial é obrigatória"]));
+        }
+        $normalizedReplies = [];
+        if (is_array($quickReplies)) {
+            foreach ($quickReplies as $entry) {
+                $term = trim($entry['term'] ?? '');
+                $response = trim($entry['response'] ?? '');
+                if ($term === '' && $response === '') {
+                    continue;
+                }
+                if ($term === '' || $response === '') {
+                    http_response_code(400);
+                    die(json_encode(["error" => "Cada resposta rápida precisa de termo e resposta"]));
+                }
+                $normalizedReplies[] = ['term' => $term, 'response' => $response];
+            }
+        }
+
+        if ($term1 !== '' && $response1 === '') {
+            http_response_code(400);
+            die(json_encode(["error" => "Resposta do termo 1 é obrigatória"]));
+        }
+        if ($term2 !== '' && $response2 === '') {
+            http_response_code(400);
+            die(json_encode(["error" => "Resposta do termo 2 é obrigatória"]));
+        }
+
+        $entries = [
+            'secretary_enabled' => $enabled ? 'true' : 'false',
+            'secretary_idle_hours' => (string)$idleHours,
+            'secretary_initial_response' => $initialResponse,
+            'secretary_term_1' => $term1,
+            'secretary_response_1' => $response1,
+            'secretary_term_2' => $term2,
+            'secretary_response_2' => $response2,
+            'secretary_quick_replies' => json_encode($normalizedReplies, JSON_UNESCAPED_UNICODE)
+        ];
+
+        $warnings = [];
+        foreach ($entries as $key => $value) {
+            $result = postInstanceSetting((string)$port, (string)$instanceId, $key, (string)$value);
+            if (!$result['ok']) {
+                $details = $result['error'] ?: ($result['response'] ?: 'Falha desconhecida');
+                $warnings[] = "{$key} ({$result['code']}): {$details}";
+                debug_log("Secretary sync failed ({$key}): {$details}");
+            }
+        }
+
+        $responsePayload = ['success' => true];
+        if (!empty($warnings)) {
+            $responsePayload['warning'] = implode(' | ', $warnings);
+        }
+        die(json_encode($responsePayload));
+    }
+
+    if ($payload['action'] === 'save_alarm_config') {
+        $events = [
+            'whatsapp' => 'WhatsApp desconectado',
+            'server' => 'Servidor desconectado',
+            'error' => 'Erro reportado'
+        ];
+        $settings = [];
+        foreach ($events as $event => $label) {
+            $enabled = isset($payload["alarm_{$event}_enabled"]) && $payload["alarm_{$event}_enabled"] !== '0';
+            $rawRecipients = $payload["alarm_{$event}_recipients"] ?? '';
+            $recipients = normalizeAlarmRecipientsForSave($rawRecipients);
+            $interval = normalizeAlarmIntervalValue(
+                $payload["alarm_{$event}_interval"] ?? '',
+                $payload["alarm_{$event}_interval_unit"] ?? ''
+            );
+
+            if ($enabled && $recipients === '') {
+                http_response_code(400);
+                die(json_encode(["error" => "Informe pelo menos um e-mail válido para {$label}"]));
+            }
+
+            $settings["alarm_{$event}_enabled"] = $enabled ? '1' : '0';
+            $settings["alarm_{$event}_recipients"] = $recipients;
+            $settings["alarm_{$event}_interval"] = $interval;
+            $settings["alarm_{$event}_interval_unit"] = 'minutes';
+        }
+
+        $nodeWarnings = [];
+        foreach ($settings as $key => $value) {
+            $post = postInstanceSetting($port, $instanceId, $key, $value);
+            if (!$post['ok']) {
+                $nodeWarnings[] = "Não foi possível salvar {$key}: " . ($post['error'] ?: "HTTP {$post['code']}");
+                debug_log("Alarm config sync error for {$key}: " . ($post['response'] ?? ''));
+            }
+        }
+
+        $responsePayload = ['success' => true];
+        if (!empty($nodeWarnings)) {
+            $responsePayload['warning'] = implode('; ', $nodeWarnings);
         }
         die(json_encode($responsePayload));
     }

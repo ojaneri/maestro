@@ -10,6 +10,9 @@
 logs/*
 logs/
 
+# Assets gerados
+assets/uploads/
+
 # Node / geral
 node_modules/
 .npm-cache/

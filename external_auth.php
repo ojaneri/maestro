@@ -242,7 +242,7 @@ Link de login: {$baseUrl}/login.php
 Atenciosamente,
 Equipe Maestro
 EOT;
-    $headers = "From: no-reply@janeri.com.br\r\n";
+    $headers = "From: atendeai@janeri.com.br\r\n";
     if (!mail($email, $subject, $message, $headers)) {
         error_log("external_auth: falha ao enviar e-mail para {$email}");
     } else {

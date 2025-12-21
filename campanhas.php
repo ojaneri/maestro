@@ -15,6 +15,12 @@ if (!isset($_SESSION['auth'])) {
     exit;
 }
 
+$dashboardBaseUrl = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
+if ($dashboardBaseUrl === '') {
+    $dashboardBaseUrl = '/';
+}
+$dashboardLogoUrl = "{$dashboardBaseUrl}/assets/maestro-logo.png";
+
 $dotenv = Dotenv\Dotenv::createImmutable(__DIR__);
 try {
     $dotenv->load();
@@ -989,8 +995,13 @@ $finishedCount = count($finishedCampaigns);
       <header class="flex flex-col gap-2">
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-3">
-            <h1 class="text-2xl font-semibold">Campanhas</h1>
-            <p class="text-sm text-slate-500">Monitore e programe envios em lote com persistência completa.</p>
+            <a href="<?= htmlspecialchars($dashboardBaseUrl) ?>" class="inline-flex items-center gap-3">
+              <img src="<?= htmlspecialchars($dashboardLogoUrl) ?>" width="56" style="height:auto;" alt="Logomarca Maestro">
+            </a>
+            <div>
+              <h1 class="text-2xl font-semibold">Campanhas</h1>
+              <p class="text-sm text-slate-500">Monitore e programe envios em lote com persistência completa.</p>
+            </div>
           </div>
           <a href="index.php" class="rounded-2xl border border-slate-300 px-4 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 transition">
             Voltar ao painel principal
