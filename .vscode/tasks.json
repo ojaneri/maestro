@@ -1,0 +1,14 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Deploy Maestro (Server1)",
+      "type": "shell",
+      "command": "ssh root@janeri1.janeri.com.br \"/var/www/html/janeri.com.br/api/envio/wpp/auto-update-and-restart.sh\"",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always"
+      }
+    }
+  ]
+}

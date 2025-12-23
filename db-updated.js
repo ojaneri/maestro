@@ -95,6 +95,7 @@ function initDatabase() {
                     .then(() => ensureGroupAutoRepliesSchema(db))
                     .then(() => ensureCalendarSchema(db))
                     .then(() => ensureTemperatureColumn(db))
+                    .then(() => ensureTaxaRColumn(db))
                     .then(() => resolve(db))
                     .catch(reject)
             }
@@ -117,6 +118,29 @@ function ensureTemperatureColumn(db) {
                 (alterErr) => {
                     if (alterErr) {
                         return reject(alterErr);
+                    }
+                    resolve();
+                }
+            );
+        });
+    });
+}
+
+function ensureTaxaRColumn(db) {
+    return new Promise((resolve, reject) => {
+        db.all(`PRAGMA table_info(contact_metadata)`, (err, rows) => {
+            if (err) {
+                return reject(err);
+            }
+            const hasTaxaR = rows.some(row => row.name === 'taxar');
+            if (hasTaxaR) {
+                return resolve();
+            }
+            db.run(
+                `ALTER TABLE contact_metadata ADD COLUMN taxar REAL DEFAULT 0.0`,
+                (alterErr) => {
+                    if (alterErr) {
+                        return reject(alterErr)
                     }
                     resolve();
                 }
@@ -1027,17 +1051,25 @@ async function setDefaultCalendarConfig(instanceId, calendarId) {
 // Save message to database
 async function saveMessage(instanceId, remoteJid, role, content, direction = 'inbound', metadata = null) {
     const db = new sqlite3.Database(DB_PATH)
-    
+
     return new Promise((resolve, reject) => {
         const sql = `
             INSERT INTO messages (instance_id, remote_jid, role, content, direction, metadata)
             VALUES (?, ?, ?, ?, ?, ?)
         `
 
-        db.run(sql, [instanceId, remoteJid, role, content, direction, metadata], function(err) {
+        db.run(sql, [instanceId, remoteJid, role, content, direction, metadata], async function(err) {
             db.close()
             if (err) reject(err)
-            else resolve({ messageId: this.lastID })
+            else {
+                // Update TaxaR after saving message
+                try {
+                    await updateTaxaR(instanceId, remoteJid)
+                } catch (taxaErr) {
+                    console.error('Error updating TaxaR:', taxaErr.message)
+                }
+                resolve({ messageId: this.lastID })
+            }
         })
     })
 }
@@ -2173,7 +2205,7 @@ async function saveThreadMetadata(instanceId, remoteJid, threadId, lastMessageId
 
 async function clearConversation(instanceId, remoteJid) {
     const db = new sqlite3.Database(DB_PATH)
-    
+
     return new Promise((resolve, reject) => {
         db.serialize(() => {
             const cleanRemote = remoteJid || ''
@@ -2204,6 +2236,48 @@ async function clearConversation(instanceId, remoteJid) {
                     }
                 })
             })
+        })
+    })
+}
+
+async function updateTaxaR(instanceId, remoteJid) {
+    if (!instanceId || !remoteJid) {
+        return 0
+    }
+    const inboundCount = await getInboundMessageCount(instanceId, remoteJid)
+    const outboundCount = await getOutboundMessageCount(instanceId, remoteJid)
+    const taxar = outboundCount > 0 ? (inboundCount / outboundCount) * 100 : 0
+
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            UPDATE contact_metadata
+            SET taxar = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE instance_id = ? AND remote_jid = ?
+        `
+        db.run(sql, [taxar, instanceId, remoteJid], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve(taxar)
+        })
+    })
+}
+
+async function getGlobalTaxaRAverage(instanceId) {
+    if (!instanceId) {
+        return 0
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT AVG(taxar) as avg_taxar
+            FROM contact_metadata
+            WHERE instance_id = ? AND taxar > 0
+        `
+        db.get(sql, [instanceId], (err, row) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(row ? row.avg_taxar || 0 : 0)
         })
     })
 }
@@ -2282,5 +2356,8 @@ module.exports = {
     // Threads
     getThreadMetadata,
     saveThreadMetadata,
-    clearConversation
+    clearConversation,
+    // TaxaR
+    updateTaxaR,
+    getGlobalTaxaRAverage
 }
