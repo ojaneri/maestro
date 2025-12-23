@@ -626,12 +626,14 @@ function scheduleNightAction() {
     if (nextScheduledAction) clearTimeout(nextScheduledAction);
     nextScheduledAction = setTimeout(() => {
         if (isNighttime()) {
-            if (!whatsappConnected) {
-                startWhatsApp().catch(err => log("Erro ao reconectar no horário:", err.message));
+            // During night (20:00-07:00), reduce activity and go offline
+            if (whatsappConnected) {
+                logoutWhatsApp().catch(err => log("Erro ao desconectar no horário noturno:", err.message));
             }
         } else {
-            if (whatsappConnected) {
-                logoutWhatsApp().catch(err => log("Erro ao desconectar no horário:", err.message));
+            // During day (07:00-20:00), connect and respond
+            if (!whatsappConnected) {
+                startWhatsApp().catch(err => log("Erro ao reconectar no horário:", err.message));
             }
         }
         scheduleNightAction();
@@ -5163,7 +5165,8 @@ async function startWhatsApp() {
             auth: state,
             printQRInTerminal: true,
             browser: ["Janeri WPP Panel", "Chrome", "1.0.0"],
-            syncFullHistory: false
+            syncFullHistory: false,
+            cachedGroupMetadata: groupMetadataCache
         })
 
         sock.ev.on("creds.update", saveCreds)
@@ -5300,6 +5303,19 @@ async function startWhatsApp() {
                         continue
                     }
                     await processMessageWithAI(msg)
+
+                    // Anti-ban: Mark as read with 5-10 second delay
+                    if (msg.key?.fromMe === false) {
+                        setTimeout(() => {
+                            if (sock && whatsappConnected) {
+                                try {
+                                    sock.readMessages([msg.key])
+                                } catch (err) {
+                                    log("Erro ao marcar como lida:", err.message)
+                                }
+                            }
+                        }, Math.random() * 5000 + 5000) // 5-10 seconds
+                    }
                 }
             } catch (e) {
                 log("Error processing messages.upsert:", e.message)
@@ -5910,23 +5926,25 @@ app.get("/api/multi-input", (req, res) => {
 app.get("/api/health", async (req, res) => {
     try {
         if (!db) {
-            return res.status(503).json({ 
+            return res.status(503).json({
                 error: "Database not available",
                 status: "disconnected"
             })
         }
-        
+
         const health = await db.getDatabaseHealth()
-        
+        const globalTaxaR = await db.getGlobalTaxaRAverage(INSTANCE_ID)
+
         res.json({
             ok: true,
             status: "connected",
             database: health,
+            globalTaxaR: globalTaxaR || 0,
             timestamp: new Date().toISOString()
         })
     } catch (err) {
         log("Error getting database health:", err.message)
-        res.status(500).json({ 
+        res.status(500).json({
             error: "Failed to get database health",
             status: "error",
             detail: err.message
