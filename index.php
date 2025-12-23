@@ -2089,7 +2089,6 @@ perf_log('index.php render', [
         <div>
           <div class="text-xs uppercase tracking-[0.3em] text-slate-400">Instância</div>
           <div class="text-3xl font-semibold text-dark"><?= htmlspecialchars($selectedInstance['name'] ?? 'Nenhuma instância') ?></div>
-          <p class="text-sm text-slate-500 mt-1">Tudo centralizado em um painel premium.</p>
           <div class="mt-3 flex flex-wrap gap-2">
             <span class="badge-pill <?= $instanceStatus === 'Running' ? 'server' : 'disconnect' ?>">
               <?= htmlspecialchars($serverBadge) ?>
@@ -2139,7 +2138,6 @@ perf_log('index.php render', [
           </div>
         </div>
       </div>
-      <p class="text-xs text-slate-500 mt-2">Assim você mantém o painel premium alinhado com as principais ações da instância.</p>
     </section>
     <!-- Tabs -->
     <div class="tabs-shell mt-6">
@@ -2292,7 +2290,7 @@ perf_log('index.php render', [
           <p class="text-xs text-slate-500">
             Métricas de mensagem em tempo real para monitorar envios e contatos.
           </p>
-          <div class="grid gap-4 md:grid-cols-3">
+          <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
             <div class="stat-card">
               <span class="text-xs uppercase tracking-[0.3em] text-slate-200">Mensagens total</span>
               <strong><?= (int)$logSummary['total_messages'] ?></strong>
@@ -2311,6 +2309,11 @@ perf_log('index.php render', [
               <p class="text-xs text-white/70 mt-2">
                 Pendentes <?= (int)$logSummary['scheduled_pending'] ?> • Enviados <?= (int)$logSummary['scheduled_sent'] ?>
               </p>
+            </div>
+            <div class="stat-card">
+              <span class="text-xs uppercase tracking-[0.3em] text-slate-200">Taxa R Média</span>
+              <strong id="averageTaxarValue">-</strong>
+              <p class="text-xs text-white/70 mt-2">Média da taxa de resposta</p>
             </div>
           </div>
         </div>
@@ -3558,6 +3561,27 @@ document.getElementById('qrResetCancelBtn')?.addEventListener('click', (event) =
   event.preventDefault();
   closeQrResetConfirm();
 });
+</script>
+<script>
+(function () {
+  const instanceId = <?= json_encode($selectedInstanceId ?? '') ?>;
+  const averageTaxarEl = document.getElementById('averageTaxarValue');
+  if (instanceId && averageTaxarEl) {
+    fetch(`?ajax_average_taxar=1&instance=${encodeURIComponent(instanceId)}`)
+      .then(response => response.json())
+      .then(data => {
+        if (data.ok && typeof data.average_taxar === 'number') {
+          averageTaxarEl.textContent = data.average_taxar.toFixed(1) + '%';
+        } else {
+          averageTaxarEl.textContent = '-';
+        }
+      })
+      .catch(err => {
+        console.error('Error fetching average TaxaR:', err);
+        averageTaxarEl.textContent = '-';
+      });
+  }
+})();
 </script>
 <script>
 (function () {
