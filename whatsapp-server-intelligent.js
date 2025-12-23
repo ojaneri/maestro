@@ -1117,7 +1117,7 @@ try {
     const dbModule = require("./db-updated")
     log("Database module carregado")
     db = dbModule
-    
+
     // Initialize database
     dbReadyPromise = db.initDatabase()
         .then(() => {
@@ -1137,6 +1137,12 @@ try {
         })
 } catch (err) {
     log("Erro ao carregar database module:", err.message)
+}
+
+// ===== CUSTOM AUTH STORE =====
+let authStore = null
+if (db) {
+    authStore = new db.DatabaseAuthStore(INSTANCE_ID)
 }
 
 const DEFAULT_HISTORY_LIMIT = 15

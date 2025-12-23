@@ -71,6 +71,15 @@ const CALENDAR_PENDING_STATES_TABLE_SQL = `
     )
 `
 
+const AUTH_STATE_TABLE_SQL = `
+    CREATE TABLE IF NOT EXISTS auth_state (
+        instance_id TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT,
+        PRIMARY KEY (instance_id, key)
+    )
+`
+
 // Initialize database
 function initDatabase() {
     return new Promise((resolve, reject) => {
@@ -307,7 +316,8 @@ const contactMetadataSQL = `
             groupAutoRepliesSQL,
             whatsappCacheSQL,
             contactContextSQL,
-            eventLogsSQL
+            eventLogsSQL,
+            AUTH_STATE_TABLE_SQL
         ]
 
         const indexes = [
@@ -2282,6 +2292,87 @@ async function getGlobalTaxaRAverage(instanceId) {
     })
 }
 
+// Auth State functions
+async function getAuthState(instanceId, key) {
+    if (!instanceId || !key) {
+        return null
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `SELECT value FROM auth_state WHERE instance_id = ? AND key = ?`
+        db.get(sql, [instanceId, key], (err, row) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(row ? row.value : null)
+        })
+    })
+}
+
+async function setAuthState(instanceId, key, value) {
+    if (!instanceId || !key) {
+        return
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            INSERT OR REPLACE INTO auth_state (instance_id, key, value)
+            VALUES (?, ?, ?)
+        `
+        db.run(sql, [instanceId, key, value], (err) => {
+            db.close()
+            if (err) reject(err)
+            else resolve()
+        })
+    })
+}
+
+async function removeAuthState(instanceId, key) {
+    if (!instanceId || !key) {
+        return
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `DELETE FROM auth_state WHERE instance_id = ? AND key = ?`
+        db.run(sql, [instanceId, key], (err) => {
+            db.close()
+            if (err) reject(err)
+            else resolve()
+        })
+    })
+}
+
+class DatabaseAuthStore {
+    constructor(instanceId) {
+        this.instanceId = instanceId
+    }
+
+    async get(key) {
+        try {
+            const value = await getAuthState(this.instanceId, key)
+            return value ? JSON.parse(value) : null
+        } catch (err) {
+            console.error('Error getting auth state:', err.message)
+            return null
+        }
+    }
+
+    async set(key, value) {
+        try {
+            await setAuthState(this.instanceId, key, JSON.stringify(value))
+        } catch (err) {
+            console.error('Error setting auth state:', err.message)
+        }
+    }
+
+    async remove(key) {
+        try {
+            await removeAuthState(this.instanceId, key)
+        } catch (err) {
+            console.error('Error removing auth state:', err.message)
+        }
+    }
+}
+
 // Export functions
 module.exports = {
     initDatabase,
@@ -2359,5 +2450,7 @@ module.exports = {
     clearConversation,
     // TaxaR
     updateTaxaR,
-    getGlobalTaxaRAverage
+    getGlobalTaxaRAverage,
+    // Auth State
+    DatabaseAuthStore
 }
