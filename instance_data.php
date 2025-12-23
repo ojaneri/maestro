@@ -307,6 +307,51 @@ function buildInstanceAlarmMetadata(array $settings): array
     return $metadata;
 }
 
+const CALENDAR_PENDING_STATE_TTL_MS = 10 * 60 * 1000;
+
+function findInstanceByCalendarState(string $state): ?array
+{
+    $trimmed = trim($state);
+    if ($trimmed === '') {
+        return null;
+    }
+    $db = openInstanceDatabase(true);
+    if (!$db) {
+        return null;
+    }
+    if (!sqliteTableExists($db, 'calendar_pending_states')) {
+        $db->close();
+        return null;
+    }
+    $stmt = $db->prepare("SELECT instance_id, created_at FROM calendar_pending_states WHERE state = :state LIMIT 1");
+    if (!$stmt) {
+        $db->close();
+        return null;
+    }
+    $stmt->bindValue(':state', $trimmed, SQLITE3_TEXT);
+    $result = $stmt->execute();
+    if (!$result) {
+        $stmt->close();
+        $db->close();
+        return null;
+    }
+    $row = $result->fetchArray(SQLITE3_ASSOC);
+    $result->finalize();
+    $stmt->close();
+    $db->close();
+    if (!$row || empty($row['instance_id'])) {
+        return null;
+    }
+    $createdAt = isset($row['created_at']) ? (int)$row['created_at'] : null;
+    if ($createdAt && (microtime(true) * 1000 - $createdAt) > CALENDAR_PENDING_STATE_TTL_MS) {
+        return null;
+    }
+    return [
+        'instance_id' => $row['instance_id'],
+        'created_at' => $createdAt
+    ];
+}
+
 function saveInstanceSettings(string $instanceId, array $entries): array
 {
     $result = ['ok' => false, 'message' => ''];

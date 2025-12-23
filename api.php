@@ -1,5 +1,4 @@
 <?php
-header("Content-Type: application/json");
 
 if (file_exists('debug')) {
     function debug_log($message) {
@@ -10,6 +9,157 @@ if (file_exists('debug')) {
 }
 
 require_once __DIR__ . '/instance_data.php';
+
+function handle_calendar_proxy_request(): void
+{
+    $path = trim((string)($_REQUEST['path'] ?? ''));
+    $state = trim((string)($_REQUEST['state'] ?? ''));
+    if ($path === '' && $state !== '') {
+        $path = 'api/calendar/oauth2/callback';
+    }
+
+    $sanitizedPath = ltrim($path, '/');
+    if ($sanitizedPath === '' || stripos($sanitizedPath, 'api/calendar') !== 0) {
+        send_calendar_proxy_error('Only api/calendar/* paths are allowed', 400);
+    }
+
+    $instanceId = trim((string)($_REQUEST['instance'] ?? ''));
+    if ($instanceId === '' && stripos($sanitizedPath, 'api/calendar/oauth2/callback') === 0 && $state !== '') {
+        $stateInfo = findInstanceByCalendarState($state);
+        if (!empty($stateInfo['instance_id'])) {
+            $instanceId = $stateInfo['instance_id'];
+        }
+    }
+    if ($instanceId === '') {
+        send_calendar_proxy_error('Instance ID and path are required', 400);
+    }
+
+    $instance = loadInstanceRecordFromDatabase($instanceId);
+    if (!$instance) {
+        send_calendar_proxy_error('Instance not found', 404);
+    }
+
+    $port = isset($instance['port']) ? (int)$instance['port'] : 0;
+    if ($port <= 0) {
+        send_calendar_proxy_error('Instance port is not configured', 500);
+    }
+
+    $targetUrl = "http://127.0.0.1:{$port}/{$sanitizedPath}";
+    $forwardParams = $_GET;
+    unset($forwardParams['calendar_proxy'], $forwardParams['path']);
+    if (!empty($forwardParams)) {
+        $targetUrl .= '?' . http_build_query($forwardParams);
+    }
+
+    debug_log("calendar proxy request for {$instanceId} -> {$targetUrl}");
+
+    $body = file_get_contents('php://input');
+    $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+
+    $ch = curl_init($targetUrl);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_MAXREDIRS, 5);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 5);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+    curl_setopt($ch, CURLOPT_CUSTOMREQUEST, strtoupper($method));
+    if (in_array(strtoupper($method), ['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], true)) {
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $body ?? '');
+    }
+
+    $forwardHeaders = [];
+    foreach (get_proxy_request_headers() as $name => $value) {
+        $lowerName = strtolower($name);
+        if (in_array($lowerName, ['host', 'content-length'], true)) {
+            continue;
+        }
+        if (is_array($value)) {
+            $value = implode(', ', $value);
+        }
+        $forwardHeaders[] = "{$name}: {$value}";
+    }
+    $forwardHeaders[] = 'X-Forwarded-For: ' . ($_SERVER['REMOTE_ADDR'] ?? '127.0.0.1');
+    curl_setopt($ch, CURLOPT_HTTPHEADER, $forwardHeaders);
+
+    $responseHeaders = [];
+    curl_setopt($ch, CURLOPT_HEADERFUNCTION, function ($curl, $headerLine) use (&$responseHeaders) {
+        $length = strlen($headerLine);
+        $trimmed = trim($headerLine);
+        if ($trimmed === '' || stripos($trimmed, 'http/') === 0) {
+            return $length;
+        }
+        $responseHeaders[] = $trimmed;
+        return $length;
+    });
+
+    $responseBody = curl_exec($ch);
+    $curlError = curl_error($ch);
+    $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE) ?: 502;
+    curl_close($ch);
+
+    if ($curlError !== '') {
+        debug_log("calendar proxy curl error for {$instanceId}: {$curlError}");
+        send_calendar_proxy_error('Failed to reach internal calendar service', 502, $curlError);
+    }
+
+    header_remove('Content-Type');
+    foreach ($responseHeaders as $headerLine) {
+        $headerName = explode(':', $headerLine, 2)[0] ?? '';
+        $lowerHeader = strtolower($headerName);
+        if (in_array($lowerHeader, ['content-length', 'transfer-encoding', 'connection'], true)) {
+            continue;
+        }
+        header($headerLine, false);
+    }
+
+    http_response_code($statusCode);
+    if ($responseBody !== false) {
+        echo $responseBody;
+    }
+    exit;
+}
+
+function send_calendar_proxy_error(string $message, int $code = 500, ?string $detail = null): void
+{
+    debug_log("calendar proxy error: {$message}" . ($detail ? " ({$detail})" : ''));
+    http_response_code($code);
+    header('Content-Type: application/json; charset=utf-8');
+    $payload = ['ok' => false, 'error' => $message];
+    if ($detail) {
+        $payload['detail'] = $detail;
+    }
+    echo json_encode($payload, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+function get_proxy_request_headers(): array
+{
+    if (function_exists('getallheaders')) {
+        return getallheaders();
+    }
+    $headers = [];
+    foreach ($_SERVER as $key => $value) {
+        if (strpos($key, 'HTTP_') === 0) {
+            $headerName = str_replace(' ', '-', ucwords(strtolower(str_replace('_', ' ', substr($key, 5)))));
+            $headers[$headerName] = $value;
+        }
+    }
+    if (isset($_SERVER['CONTENT_TYPE'])) {
+        $headers['Content-Type'] = $_SERVER['CONTENT_TYPE'];
+    }
+    if (isset($_SERVER['CONTENT_LENGTH'])) {
+        $headers['Content-Length'] = $_SERVER['CONTENT_LENGTH'];
+    }
+    return $headers;
+}
+
+$calendarProxyRequested = array_key_exists('calendar_proxy', $_GET) || array_key_exists('state', $_GET);
+if ($calendarProxyRequested) {
+    handle_calendar_proxy_request();
+    exit;
+}
+
+header("Content-Type: application/json");
 
 debug_log('api.php: Request received');
 

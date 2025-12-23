@@ -84,6 +84,39 @@ The system now uses a **SQLite** database as the single source of truth, elimina
     ```
     O banco de dados `chat_data.db` será criado automaticamente.
 
+## Google Calendar (PT)
+
+Para habilitar o agendamento por instância com Google Calendar:
+
+- Defina as variáveis de ambiente:
+  ```env
+  GOOGLE_OAUTH_CLIENT_ID=seu-client-id
+  GOOGLE_OAUTH_CLIENT_SECRET=seu-client-secret
+  GOOGLE_OAUTH_REDIRECT_URL=https://janeri.com.br/api/envio/wpp/api.php
+  CALENDAR_TOKEN_SECRET=uma-chave-forte-para-criptografia
+  ```
+- Conecte via OAuth:
+  - `GET /api/calendar/auth-url?instance=INSTANCE_ID` → abra a URL retornada.
+  - Callback em `/api/calendar/oauth2/callback` salva tokens por instância.
+- Configure calendários e disponibilidade:
+  - `GET /api/calendar/google-calendars`
+  - `POST /api/calendar/calendars` (envie `calendar_id`, `availability`, `timezone`, `is_default`)
+
+Exemplo de disponibilidade (`availability`):
+```json
+{
+  "timezone": "America/Sao_Paulo",
+  "buffer_minutes": 10,
+  "min_notice_minutes": 60,
+  "step_minutes": 30,
+  "days": {
+    "mon": [{"start":"09:00","end":"12:00"},{"start":"14:00","end":"18:00"}],
+    "tue": [{"start":"09:00","end":"18:00"}],
+    "all": [{"start":"09:00","end":"18:00"}]
+  }
+}
+```
+
 ## Installation (EN)
 
 1.  **Clone the repository:**
@@ -109,6 +142,39 @@ The system now uses a **SQLite** database as the single source of truth, elimina
     php -S localhost:8080 index.php
     ```
     The `chat_data.db` database will be created automatically.
+
+## Google Calendar (EN)
+
+To enable per-instance scheduling with Google Calendar:
+
+- Set environment variables:
+  ```env
+  GOOGLE_OAUTH_CLIENT_ID=your-client-id
+  GOOGLE_OAUTH_CLIENT_SECRET=your-client-secret
+  GOOGLE_OAUTH_REDIRECT_URL=https://janeri.com.br/api/envio/wpp/api.php
+  CALENDAR_TOKEN_SECRET=a-strong-encryption-key
+  ```
+- Connect via OAuth:
+  - `GET /api/calendar/auth-url?instance=INSTANCE_ID` → open the returned URL.
+  - Callback at `/api/calendar/oauth2/callback` stores tokens per instance.
+- Configure calendars and availability:
+  - `GET /api/calendar/google-calendars`
+  - `POST /api/calendar/calendars` (send `calendar_id`, `availability`, `timezone`, `is_default`)
+
+Availability example (`availability`):
+```json
+{
+  "timezone": "America/Sao_Paulo",
+  "buffer_minutes": 10,
+  "min_notice_minutes": 60,
+  "step_minutes": 30,
+  "days": {
+    "mon": [{"start":"09:00","end":"12:00"},{"start":"14:00","end":"18:00"}],
+    "tue": [{"start":"09:00","end":"18:00"}],
+    "all": [{"start":"09:00","end":"18:00"}]
+  }
+}
+```
 
 ---
 

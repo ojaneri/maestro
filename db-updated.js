@@ -36,6 +36,40 @@ const INSTANCES_TABLE_SQL = `
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
 `
+const CALENDAR_ACCOUNTS_TABLE_SQL = `
+    CREATE TABLE IF NOT EXISTS calendar_accounts (
+        instance_id TEXT PRIMARY KEY,
+        calendar_email TEXT,
+        access_token TEXT,
+        refresh_token TEXT,
+        token_expiry INTEGER,
+        scope TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+`
+const CALENDAR_CONFIGS_TABLE_SQL = `
+    CREATE TABLE IF NOT EXISTS calendar_calendars (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        instance_id TEXT NOT NULL,
+        calendar_id TEXT NOT NULL,
+        summary TEXT,
+        timezone TEXT,
+        availability_json TEXT,
+        is_default INTEGER NOT NULL DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(instance_id, calendar_id)
+    )
+`
+
+const CALENDAR_PENDING_STATES_TABLE_SQL = `
+    CREATE TABLE IF NOT EXISTS calendar_pending_states (
+        state TEXT PRIMARY KEY,
+        instance_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+    )
+`
 
 // Initialize database
 function initDatabase() {
@@ -55,12 +89,42 @@ function initDatabase() {
                     .then(() => ensureContactContextSchema(db))
                     .then(() => ensureEventLogsSchema(db))
                     .then(() => ensurePersistentVariablesSchema(db))
+                    .then(() => ensureGroupMonitoringSchema(db))
+                    .then(() => ensureGroupMessagesSchema(db))
+                    .then(() => ensureGroupSchedulesSchema(db))
+                    .then(() => ensureGroupAutoRepliesSchema(db))
+                    .then(() => ensureCalendarSchema(db))
+                    .then(() => ensureTemperatureColumn(db))
                     .then(() => resolve(db))
                     .catch(reject)
             }
         })
     })
 }
+
+function ensureTemperatureColumn(db) {
+    return new Promise((resolve, reject) => {
+        db.all(`PRAGMA table_info(contact_metadata)`, (err, rows) => {
+            if (err) {
+                return reject(err);
+            }
+            const hasTemperature = rows.some(row => row.name === 'temperature');
+            if (hasTemperature) {
+                return resolve();
+            }
+            db.run(
+                `ALTER TABLE contact_metadata ADD COLUMN temperature TEXT CHECK(temperature IN ('cold', 'warm', 'hot')) NOT NULL DEFAULT 'warm'`,
+                (alterErr) => {
+                    if (alterErr) {
+                        return reject(alterErr);
+                    }
+                    resolve();
+                }
+            );
+        });
+    });
+}
+
 
 // Create required tables according to specifications
 function createTables(db) {
@@ -118,6 +182,59 @@ const contactMetadataSQL = `
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         `
+
+        const groupMonitoringSQL = `
+            CREATE TABLE IF NOT EXISTS group_monitoring (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                instance_id TEXT NOT NULL,
+                group_jid TEXT NOT NULL,
+                group_name TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(instance_id, group_jid)
+            )
+        `
+
+        const groupMessagesSQL = `
+            CREATE TABLE IF NOT EXISTS group_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                instance_id TEXT NOT NULL,
+                group_jid TEXT NOT NULL,
+                participant_jid TEXT,
+                direction TEXT NOT NULL CHECK(direction IN ('inbound','outbound')),
+                content TEXT NOT NULL,
+                metadata TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `
+
+        const groupSchedulesSQL = `
+            CREATE TABLE IF NOT EXISTS group_scheduled_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                instance_id TEXT NOT NULL,
+                group_jid TEXT NOT NULL,
+                message TEXT NOT NULL,
+                scheduled_at TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('pending','sent','failed')) DEFAULT 'pending',
+                last_attempt_at TEXT,
+                error TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `
+
+        const groupAutoRepliesSQL = `
+            CREATE TABLE IF NOT EXISTS group_auto_replies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                instance_id TEXT NOT NULL,
+                group_jid TEXT NOT NULL,
+                replies_json TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(instance_id, group_jid)
+            )
+        `
         const whatsappCacheSQL = `
             CREATE TABLE IF NOT EXISTS whatsapp_number_cache (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -160,6 +277,10 @@ const contactMetadataSQL = `
             threadsSQL,
             contactMetadataSQL,
             scheduledSQL,
+            groupMonitoringSQL,
+            groupMessagesSQL,
+            groupSchedulesSQL,
+            groupAutoRepliesSQL,
             whatsappCacheSQL,
             contactContextSQL,
             eventLogsSQL
@@ -176,6 +297,13 @@ const contactMetadataSQL = `
             'CREATE INDEX IF NOT EXISTS idx_scheduled_instance_status ON scheduled_messages(instance_id, status)',
             'CREATE INDEX IF NOT EXISTS idx_scheduled_due ON scheduled_messages(scheduled_at)',
             'CREATE INDEX IF NOT EXISTS idx_scheduled_campaign ON scheduled_messages(campaign_id)',
+            'CREATE INDEX IF NOT EXISTS idx_group_monitor_instance ON group_monitoring(instance_id)',
+            'CREATE INDEX IF NOT EXISTS idx_group_messages_instance ON group_messages(instance_id)',
+            'CREATE INDEX IF NOT EXISTS idx_group_messages_group ON group_messages(group_jid)',
+            'CREATE INDEX IF NOT EXISTS idx_group_messages_timestamp ON group_messages(timestamp)',
+            'CREATE INDEX IF NOT EXISTS idx_group_schedule_instance ON group_scheduled_messages(instance_id)',
+            'CREATE INDEX IF NOT EXISTS idx_group_schedule_due ON group_scheduled_messages(scheduled_at)',
+            'CREATE INDEX IF NOT EXISTS idx_group_replies_instance ON group_auto_replies(instance_id)',
             'CREATE INDEX IF NOT EXISTS idx_whatsapp_cache_phone ON whatsapp_number_cache(phone)',
             'CREATE INDEX IF NOT EXISTS idx_contact_context_instance ON contact_context(instance_id)',
             'CREATE INDEX IF NOT EXISTS idx_contact_context_remote ON contact_context(remote_jid)',
@@ -422,6 +550,198 @@ function ensurePersistentVariablesSchema(db) {
     })
 }
 
+function ensureGroupMonitoringSchema(db) {
+    return new Promise((resolve, reject) => {
+        const sql = `
+            CREATE TABLE IF NOT EXISTS group_monitoring (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                instance_id TEXT NOT NULL,
+                group_jid TEXT NOT NULL,
+                group_name TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(instance_id, group_jid)
+            )
+        `
+        db.run(sql, err => {
+            if (err) reject(err)
+            else resolve()
+        })
+    })
+}
+
+function ensureGroupMessagesSchema(db) {
+    return new Promise((resolve, reject) => {
+        const sql = `
+            CREATE TABLE IF NOT EXISTS group_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                instance_id TEXT NOT NULL,
+                group_jid TEXT NOT NULL,
+                participant_jid TEXT,
+                direction TEXT NOT NULL CHECK(direction IN ('inbound','outbound')),
+                content TEXT NOT NULL,
+                metadata TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `
+        db.run(sql, err => {
+            if (err) reject(err)
+            else resolve()
+        })
+    })
+}
+
+function ensureGroupSchedulesSchema(db) {
+    return new Promise((resolve, reject) => {
+        const sql = `
+            CREATE TABLE IF NOT EXISTS group_scheduled_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                instance_id TEXT NOT NULL,
+                group_jid TEXT NOT NULL,
+                message TEXT NOT NULL,
+                scheduled_at TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('pending','sent','failed')) DEFAULT 'pending',
+                last_attempt_at TEXT,
+                error TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `
+        db.run(sql, err => {
+            if (err) reject(err)
+            else resolve()
+        })
+    })
+}
+
+function ensureGroupAutoRepliesSchema(db) {
+    return new Promise((resolve, reject) => {
+        const sql = `
+            CREATE TABLE IF NOT EXISTS group_auto_replies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                instance_id TEXT NOT NULL,
+                group_jid TEXT NOT NULL,
+                replies_json TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(instance_id, group_jid)
+            )
+        `
+        db.run(sql, err => {
+            if (err) reject(err)
+            else resolve()
+        })
+    })
+}
+
+function ensureCalendarSchema(db) {
+    return new Promise((resolve, reject) => {
+        db.serialize(() => {
+            db.run(CALENDAR_ACCOUNTS_TABLE_SQL, (err) => {
+                if (err) {
+                    reject(err)
+                    return
+                }
+                db.run(CALENDAR_CONFIGS_TABLE_SQL, (err2) => {
+                    if (err2) {
+                        reject(err2)
+                        return
+                    }
+                    db.run(CALENDAR_PENDING_STATES_TABLE_SQL, (err3) => {
+                        if (err3) {
+                            reject(err3)
+                            return
+                        }
+                        resolve()
+                    })
+                })
+            })
+        })
+    })
+}
+
+async function insertCalendarPendingState(instanceId, state, createdAt = Date.now()) {
+    if (!instanceId || !state) {
+        return { ok: false }
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    const timestamp = Number(createdAt) || Date.now()
+    return new Promise((resolve, reject) => {
+        const sql = `
+            INSERT INTO calendar_pending_states (state, instance_id, created_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(state) DO UPDATE SET
+                instance_id = excluded.instance_id,
+                created_at = excluded.created_at
+        `
+        db.run(sql, [state, instanceId, timestamp], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ upserted: this.changes })
+        })
+    })
+}
+
+async function deleteCalendarPendingState(state) {
+    if (!state) {
+        return { deleted: 0 }
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            DELETE FROM calendar_pending_states
+            WHERE state = ?
+        `
+        db.run(sql, [state], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ deleted: this.changes })
+        })
+    })
+}
+
+async function findCalendarPendingState(state) {
+    if (!state) {
+        return null
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT state, instance_id, created_at
+            FROM calendar_pending_states
+            WHERE state = ?
+            LIMIT 1
+        `
+        db.get(sql, [state], (err, row) => {
+            db.close()
+            if (err) {
+                reject(err)
+                return
+            }
+            resolve(row || null)
+        })
+    })
+}
+
+async function deleteExpiredCalendarPendingStates(cutoffMs) {
+    if (!Number.isFinite(cutoffMs)) {
+        return { deleted: 0 }
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            DELETE FROM calendar_pending_states
+            WHERE created_at < ?
+        `
+        db.run(sql, [cutoffMs], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ deleted: this.changes })
+        })
+    })
+}
+
 function ensureDirectionColumn(db) {
     return new Promise((resolve, reject) => {
         db.all(`PRAGMA table_info(messages)`, (err, rows) => {
@@ -540,6 +860,168 @@ async function getSettings(instanceIdOrKeys, maybeKeys) {
     })
 }
 
+// ===== CALENDAR INTEGRATION =====
+async function getCalendarAccount(instanceId) {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT instance_id, calendar_email, access_token, refresh_token, token_expiry, scope
+            FROM calendar_accounts
+            WHERE instance_id = ?
+        `
+        db.get(sql, [instanceId], (err, row) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(row || null)
+        })
+    })
+}
+
+async function upsertCalendarAccount(instanceId, payload) {
+    const db = new sqlite3.Database(DB_PATH)
+    const {
+        calendar_email: email = null,
+        access_token: accessToken = null,
+        refresh_token: refreshToken = null,
+        token_expiry: tokenExpiry = null,
+        scope = null
+    } = payload || {}
+    return new Promise((resolve, reject) => {
+        const sql = `
+            INSERT INTO calendar_accounts (instance_id, calendar_email, access_token, refresh_token, token_expiry, scope, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(instance_id) DO UPDATE SET
+                calendar_email = excluded.calendar_email,
+                access_token = excluded.access_token,
+                refresh_token = excluded.refresh_token,
+                token_expiry = excluded.token_expiry,
+                scope = excluded.scope,
+                updated_at = CURRENT_TIMESTAMP
+        `
+        db.run(sql, [instanceId, email, accessToken, refreshToken, tokenExpiry, scope], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ updated: this.changes })
+        })
+    })
+}
+
+async function clearCalendarAccount(instanceId) {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        db.serialize(() => {
+            db.run(`DELETE FROM calendar_accounts WHERE instance_id = ?`, [instanceId], function(err) {
+                if (err) {
+                    db.close()
+                    reject(err)
+                    return
+                }
+                db.run(`DELETE FROM calendar_calendars WHERE instance_id = ?`, [instanceId], function(err2) {
+                    db.close()
+                    if (err2) reject(err2)
+                    else resolve({ deleted: this.changes })
+                })
+            })
+        })
+    })
+}
+
+async function listCalendarConfigs(instanceId) {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT id, instance_id, calendar_id, summary, timezone, availability_json, is_default
+            FROM calendar_calendars
+            WHERE instance_id = ?
+            ORDER BY is_default DESC, summary ASC, calendar_id ASC
+        `
+        db.all(sql, [instanceId], (err, rows) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(rows || [])
+        })
+    })
+}
+
+async function getCalendarConfig(instanceId, calendarId) {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT id, instance_id, calendar_id, summary, timezone, availability_json, is_default
+            FROM calendar_calendars
+            WHERE instance_id = ? AND calendar_id = ?
+        `
+        db.get(sql, [instanceId, calendarId], (err, row) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(row || null)
+        })
+    })
+}
+
+async function upsertCalendarConfig(instanceId, calendarId, payload) {
+    const db = new sqlite3.Database(DB_PATH)
+    const {
+        summary = null,
+        timezone = null,
+        availability_json: availabilityJson = null,
+        is_default: isDefault = 0
+    } = payload || {}
+    return new Promise((resolve, reject) => {
+        const sql = `
+            INSERT INTO calendar_calendars (instance_id, calendar_id, summary, timezone, availability_json, is_default, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(instance_id, calendar_id) DO UPDATE SET
+                summary = excluded.summary,
+                timezone = excluded.timezone,
+                availability_json = excluded.availability_json,
+                is_default = excluded.is_default,
+                updated_at = CURRENT_TIMESTAMP
+        `
+        db.run(sql, [instanceId, calendarId, summary, timezone, availabilityJson, isDefault ? 1 : 0], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ updated: this.changes })
+        })
+    })
+}
+
+async function deleteCalendarConfig(instanceId, calendarId) {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `DELETE FROM calendar_calendars WHERE instance_id = ? AND calendar_id = ?`
+        db.run(sql, [instanceId, calendarId], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ deleted: this.changes })
+        })
+    })
+}
+
+async function setDefaultCalendarConfig(instanceId, calendarId) {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        db.serialize(() => {
+            db.run(`UPDATE calendar_calendars SET is_default = 0 WHERE instance_id = ?`, [instanceId], (err) => {
+                if (err) {
+                    db.close()
+                    reject(err)
+                    return
+                }
+                db.run(
+                    `UPDATE calendar_calendars SET is_default = 1, updated_at = CURRENT_TIMESTAMP WHERE instance_id = ? AND calendar_id = ?`,
+                    [instanceId, calendarId],
+                    function(err2) {
+                        db.close()
+                        if (err2) reject(err2)
+                        else resolve({ updated: this.changes })
+                    }
+                )
+            })
+        })
+    })
+}
+
 // ===== MESSAGES MANAGEMENT =====
 
 // Save message to database
@@ -561,7 +1043,7 @@ async function saveMessage(instanceId, remoteJid, role, content, direction = 'in
 }
 
 // Save contact metadata (status/profile information)
-async function saveContactMetadata(instanceId, remoteJid, contactName = null, statusName = null, profilePicture = null) {
+async function saveContactMetadata(instanceId, remoteJid, contactName = null, statusName = null, profilePicture = null, temperature = null) {
     if (!remoteJid) {
         throw new Error('Remote JID is required to save contact metadata')
     }
@@ -570,12 +1052,13 @@ async function saveContactMetadata(instanceId, remoteJid, contactName = null, st
     
     return new Promise((resolve, reject) => {
         const sql = `
-            INSERT INTO contact_metadata (instance_id, remote_jid, contact_name, status_name, profile_picture, updated_at)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO contact_metadata (instance_id, remote_jid, contact_name, status_name, profile_picture, temperature, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(instance_id, remote_jid) DO UPDATE SET
                 contact_name = COALESCE(excluded.contact_name, contact_metadata.contact_name),
                 status_name = COALESCE(excluded.status_name, contact_metadata.status_name),
                 profile_picture = COALESCE(excluded.profile_picture, contact_metadata.profile_picture),
+                temperature = COALESCE(excluded.temperature, contact_metadata.temperature),
                 updated_at = CURRENT_TIMESTAMP
         `
         const params = [
@@ -583,7 +1066,8 @@ async function saveContactMetadata(instanceId, remoteJid, contactName = null, st
             remoteJid,
             contactName,
             statusName,
-            profilePicture
+            profilePicture,
+            temperature
         ]
 
         db.run(sql, params, function(err) {
@@ -601,7 +1085,7 @@ async function getContactMetadata(instanceId, remoteJid) {
     const db = new sqlite3.Database(DB_PATH)
     return new Promise((resolve, reject) => {
         const sql = `
-            SELECT contact_name, status_name, profile_picture
+            SELECT contact_name, status_name, profile_picture, temperature
             FROM contact_metadata
             WHERE instance_id = ?
               AND remote_jid = ?
@@ -722,6 +1206,244 @@ async function fetchDueScheduledMessages(instanceId, limit = 10) {
             db.close()
             if (err) reject(err)
             else resolve(rows)
+        })
+    })
+}
+
+async function setMonitoredGroups(instanceId, groups = []) {
+    const db = new sqlite3.Database(DB_PATH)
+    const sanitized = Array.isArray(groups)
+        ? groups.map(group => ({
+            jid: String(group?.jid || "").trim(),
+            name: String(group?.name || "").trim() || null
+        })).filter(group => group.jid)
+        : []
+
+    return new Promise((resolve, reject) => {
+        db.serialize(() => {
+            db.run("DELETE FROM group_monitoring WHERE instance_id = ?", [instanceId], err => {
+                if (err) {
+                    db.close()
+                    reject(err)
+                    return
+                }
+                if (!sanitized.length) {
+                    db.close()
+                    resolve({ updated: 0 })
+                    return
+                }
+                const stmt = db.prepare(`
+                    INSERT INTO group_monitoring (instance_id, group_jid, group_name, enabled)
+                    VALUES (?, ?, ?, 1)
+                `)
+                sanitized.forEach(group => {
+                    stmt.run([instanceId, group.jid, group.name])
+                })
+                stmt.finalize(err2 => {
+                    db.close()
+                    if (err2) reject(err2)
+                    else resolve({ updated: sanitized.length })
+                })
+            })
+        })
+    })
+}
+
+async function getMonitoredGroups(instanceId) {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        db.all(`
+            SELECT group_jid, group_name, enabled, updated_at
+            FROM group_monitoring
+            WHERE instance_id = ?
+            ORDER BY group_name ASC
+        `, [instanceId], (err, rows) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(rows || [])
+        })
+    })
+}
+
+async function getMonitoredGroup(instanceId, groupJid) {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        db.get(`
+            SELECT group_jid, group_name, enabled
+            FROM group_monitoring
+            WHERE instance_id = ? AND group_jid = ? AND enabled = 1
+            LIMIT 1
+        `, [instanceId, groupJid], (err, row) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(row || null)
+        })
+    })
+}
+
+async function deleteMonitoredGroup(instanceId, groupJid) {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        db.run(
+            "DELETE FROM group_monitoring WHERE instance_id = ? AND group_jid = ?",
+            [instanceId, groupJid],
+            function(err) {
+                db.close()
+                if (err) reject(err)
+                else resolve({ deleted: this.changes })
+            }
+        )
+    })
+}
+
+async function saveGroupMessage(instanceId, groupJid, participantJid, direction, content, metadata = null) {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            INSERT INTO group_messages (instance_id, group_jid, participant_jid, direction, content, metadata)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `
+        db.run(sql, [instanceId, groupJid, participantJid, direction, content, metadata], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ messageId: this.lastID })
+        })
+    })
+}
+
+async function getGroupMessages(instanceId, groupJid, start = null, end = null, limit = 200) {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const clauses = ["instance_id = ?"]
+        const params = [instanceId]
+        if (groupJid) {
+            clauses.push("group_jid = ?")
+            params.push(groupJid)
+        }
+        if (start) {
+            clauses.push("timestamp >= ?")
+            params.push(start)
+        }
+        if (end) {
+            clauses.push("timestamp <= ?")
+            params.push(end)
+        }
+        const sql = `
+            SELECT id, group_jid, participant_jid, direction, content, metadata, timestamp
+            FROM group_messages
+            WHERE ${clauses.join(" AND ")}
+            ORDER BY timestamp DESC
+            LIMIT ?
+        `
+        params.push(limit)
+        db.all(sql, params, (err, rows) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(rows || [])
+        })
+    })
+}
+
+async function enqueueGroupScheduledMessage(instanceId, groupJid, message, scheduledAt) {
+    const db = new sqlite3.Database(DB_PATH)
+    const scheduledDate = scheduledAt instanceof Date ? scheduledAt : new Date(scheduledAt)
+    const scheduledIso = scheduledDate.toISOString()
+    return new Promise((resolve, reject) => {
+        const sql = `
+            INSERT INTO group_scheduled_messages (instance_id, group_jid, message, scheduled_at, status)
+            VALUES (?, ?, ?, ?, 'pending')
+        `
+        db.run(sql, [instanceId, groupJid, message, scheduledIso], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ scheduledId: this.lastID, scheduledAt: scheduledIso })
+        })
+    })
+}
+
+async function fetchDueGroupScheduledMessages(instanceId, limit = 10) {
+    const db = new sqlite3.Database(DB_PATH)
+    const nowIso = new Date().toISOString()
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT id, group_jid, message, scheduled_at
+            FROM group_scheduled_messages
+            WHERE instance_id = ?
+              AND status = 'pending'
+              AND scheduled_at <= ?
+            ORDER BY scheduled_at ASC
+            LIMIT ?
+        `
+        db.all(sql, [instanceId, nowIso, limit], (err, rows) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(rows || [])
+        })
+    })
+}
+
+async function updateGroupScheduledMessageStatus(id, status, error = null) {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            UPDATE group_scheduled_messages
+            SET status = ?,
+                error = ?,
+                last_attempt_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `
+        db.run(sql, [status, error, id], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ updated: this.changes })
+        })
+    })
+}
+
+async function deleteGroupScheduledMessage(id) {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        db.run("DELETE FROM group_scheduled_messages WHERE id = ?", [id], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ deleted: this.changes })
+        })
+    })
+}
+
+async function getGroupAutoReplies(instanceId, groupJid) {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        db.get(`
+            SELECT replies_json, enabled
+            FROM group_auto_replies
+            WHERE instance_id = ? AND group_jid = ?
+            LIMIT 1
+        `, [instanceId, groupJid], (err, row) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(row || null)
+        })
+    })
+}
+
+async function setGroupAutoReplies(instanceId, groupJid, replies = [], enabled = true) {
+    const db = new sqlite3.Database(DB_PATH)
+    const payload = Array.isArray(replies) ? replies.filter(Boolean) : []
+    const repliesJson = JSON.stringify(payload)
+    const enabledValue = enabled ? 1 : 0
+    return new Promise((resolve, reject) => {
+        const sql = `
+            INSERT INTO group_auto_replies (instance_id, group_jid, replies_json, enabled)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(instance_id, group_jid)
+            DO UPDATE SET replies_json = excluded.replies_json, enabled = excluded.enabled, updated_at = CURRENT_TIMESTAMP
+        `
+        db.run(sql, [instanceId, groupJid, repliesJson, enabledValue], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ updated: this.changes })
         })
     })
 }
@@ -1061,6 +1783,24 @@ async function getPersistentVariable(instanceId, key) {
     })
 }
 
+async function deletePersistentVariable(instanceId, key) {
+    if (!instanceId || !key) {
+        return { deleted: 0 }
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            DELETE FROM persistent_variables
+            WHERE instance_id = ? AND key = ?
+        `
+        db.run(sql, [instanceId, key], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ deleted: this.changes })
+        })
+    })
+}
+
 async function listPersistentVariables(instanceId) {
     if (!instanceId) {
         return []
@@ -1123,6 +1863,50 @@ async function getTimeSinceLastInboundMessage(instanceId, remoteJid) {
                 return
             }
             resolve(new Date(row.timestamp))
+        })
+    })
+}
+
+async function getInboundMessageCount(instanceId, remoteJid) {
+    if (!instanceId || !remoteJid) {
+        return 0
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT COUNT(id) as count
+            FROM messages
+            WHERE instance_id = ? AND remote_jid = ? AND direction = 'inbound'
+        `
+        db.get(sql, [instanceId, remoteJid], (err, row) => {
+            db.close()
+            if (err) {
+                reject(err)
+            } else {
+                resolve(row ? row.count : 0)
+            }
+        })
+    })
+}
+
+async function getOutboundMessageCount(instanceId, remoteJid) {
+    if (!instanceId || !remoteJid) {
+        return 0
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT COUNT(id) as count
+            FROM messages
+            WHERE instance_id = ? AND remote_jid = ? AND direction = 'outbound'
+        `
+        db.get(sql, [instanceId, remoteJid], (err, row) => {
+            db.close()
+            if (err) {
+                reject(err)
+            } else {
+                resolve(row ? row.count : 0)
+            }
         })
     })
 }
@@ -1431,6 +2215,19 @@ module.exports = {
     getSetting,
     setSetting,
     getSettings,
+    // Calendar integration
+    getCalendarAccount,
+    upsertCalendarAccount,
+    clearCalendarAccount,
+    listCalendarConfigs,
+    getCalendarConfig,
+    upsertCalendarConfig,
+    deleteCalendarConfig,
+    setDefaultCalendarConfig,
+    insertCalendarPendingState,
+    deleteCalendarPendingState,
+    findCalendarPendingState,
+    deleteExpiredCalendarPendingStates,
     // Messages
     saveMessage,
     saveContactMetadata,
@@ -1449,11 +2246,26 @@ module.exports = {
     setContactContext,
     getContactContext,
     deleteContactContext,
+    setMonitoredGroups,
+    getMonitoredGroups,
+    getMonitoredGroup,
+    deleteMonitoredGroup,
+    saveGroupMessage,
+    getGroupMessages,
+    enqueueGroupScheduledMessage,
+    fetchDueGroupScheduledMessages,
+    updateGroupScheduledMessageStatus,
+    deleteGroupScheduledMessage,
+    getGroupAutoReplies,
+    setGroupAutoReplies,
     setPersistentVariable,
     getPersistentVariable,
     listPersistentVariables,
+    deletePersistentVariable,
     logEvent,
     getTimeSinceLastInboundMessage,
+    getInboundMessageCount,
+    getOutboundMessageCount,
     getScheduledMessages,
     getWhatsAppNumberCache,
     setWhatsAppNumberCache,

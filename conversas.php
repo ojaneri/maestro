@@ -61,7 +61,8 @@ $ajaxDebugKeys = [
     'ajax_multi_input',
     'ajax_health',
     'ajax_status_notifications',
-    'ajax_schedule_create'
+    'ajax_schedule_create',
+    'ajax_message_counts'
 ];
 $isAjaxRequest = false;
 foreach ($ajaxDebugKeys as $key) {
@@ -267,6 +268,16 @@ if (isset($_GET['ajax_schedule_create']) && $_SERVER['REQUEST_METHOD'] === 'POST
     $path = "/api/scheduled/{$instanceId}";
     $body = file_get_contents('php://input');
     proxyNodeRequest($instance, $path, 'POST', $body);
+}
+
+if (isset($_GET['ajax_message_counts'])) {
+    $remoteJid = $_GET['remote'] ?? '';
+    if (!$remoteJid) {
+        respondJson(['ok' => false, 'error' => 'Remote JID é obrigatório'], 400);
+    }
+    $encodedRemote = rawurlencode($remoteJid);
+    $path = buildNodePath("/api/message-counts/{$instanceId}/{$encodedRemote}", []);
+    proxyNodeRequest($instance, $path, 'GET');
 }
 
 function openChatDbOrFail() {
@@ -695,6 +706,8 @@ if (isset($_GET['ajax_send']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
           <?php if ($instancePhoneLabel): ?>
             <div class="text-[11px] text-slate-500 mt-1">WhatsApp local: <?= htmlspecialchars($instancePhoneLabel) ?></div>
           <?php endif; ?>
+          <div class="text-[11px] text-slate-500 mt-1">Taxa: <span id="chatTaxar">--</span>%</div>
+          <div class="text-[11px] text-slate-500 mt-1">Temperatura: <span id="chatTemperature">--</span></div>
         </div>
       </div>
       
@@ -1004,6 +1017,9 @@ const statusBroadcastText = document.getElementById('statusBroadcastText');
 const statusBroadcastClose = document.getElementById('statusBroadcastClose');
 const EXPORT_LINK_MARKUP = '<a href="#" data-export-log class="text-primary font-semibold hover:underline">Salvar log</a>';
 let exportEnabled = false;
+
+const chatTaxar = document.getElementById('chatTaxar');
+const chatTemperature = document.getElementById('chatTemperature');
 
 function updateScheduleBadge(pendingCount = 0, sentCount = 0) {
     if (!scheduleBadge) {
@@ -1477,30 +1493,41 @@ async function loadMessages(remoteJid) {
         isLoading = true;
         chatStatus.textContent = 'Carregando mensagens...';
         
-        const response = await fetchWithCreds(buildAjaxUrl({ ajax_messages: '1', remote: remoteJid, limit: '0' }));
-        const data = await response.json();
+        const messagesResponse = await fetchWithCreds(buildAjaxUrl({ ajax_messages: '1', remote: remoteJid, limit: '0' }));
+        const messagesData = await messagesResponse.json();
+
+        const messageCountsResponse = await fetchWithCreds(buildAjaxUrl({ ajax_message_counts: '1', remote: remoteJid }));
+        const messageCountsData = await messageCountsResponse.json();
         
-        if (data.ok) {
-            messages[remoteJid] = data.messages;
-            if (data.contact_meta) {
+        if (messagesData.ok && messageCountsData.ok) {
+            messages[remoteJid] = messagesData.messages;
+            let taxar = 0;
+            if (messageCountsData.outboundCount > 0) {
+                taxar = (messageCountsData.inboundCount / messageCountsData.outboundCount) * 100;
+            }
+
+            if (messagesData.contact_meta) {
                 const mergedMeta = {
                     ...(selectedContactData || {}),
-                    ...data.contact_meta,
-                    remote_jid: remoteJid
+                    ...messagesData.contact_meta,
+                    remote_jid: remoteJid,
+                    taxar: taxar,
+                    temperature: messagesData.contact_meta.temperature || 'warm' // Ensure temperature is set
                 };
                 selectedContactData = mergedMeta;
                 const contactIndex = contacts.findIndex(c => c.remote_jid === remoteJid);
                 if (contactIndex >= 0) {
-                    contacts[contactIndex] = { ...contacts[contactIndex], ...data.contact_meta };
+                    contacts[contactIndex] = { ...contacts[contactIndex], ...messagesData.contact_meta, taxar: taxar, temperature: messagesData.contact_meta.temperature || 'warm' };
                     renderContacts();
                 }
                 renderChatHeaderAvatar(mergedMeta);
+                renderChatHeaderDetails(); // Call the new rendering function
             }
-            console.log(logPrefix, 'loadMessages success', { remote: remoteJid, count: data.messages.length });
+            console.log(logPrefix, 'loadMessages success', { remote: remoteJid, count: messagesData.messages.length, taxar: taxar, temperature: selectedContactData.temperature });
             renderMessages(remoteJid);
-            chatStatus.textContent = `${data.messages.length} mensagens`;
+            chatStatus.textContent = `${messagesData.messages.length} mensagens`;
         } else {
-            throw new Error(data.error || 'Failed to load messages');
+            throw new Error(messagesData.error || messageCountsData.error || 'Failed to load messages or message counts');
         }
     } catch (error) {
         console.error(logPrefix, 'Error loading messages:', error);
@@ -1669,6 +1696,20 @@ function renderChatHeaderAvatar(meta) {
     }
     const initial = statusLabel.charAt(0).toUpperCase() || '';
     chatContactAvatar.textContent = initial;
+}
+
+function renderChatHeaderDetails() {
+    if (!selectedContactData) {
+        if (chatTaxar) chatTaxar.textContent = '--';
+        if (chatTemperature) chatTemperature.textContent = '--';
+        return;
+    }
+
+    const taxar = selectedContactData.taxar !== undefined ? selectedContactData.taxar.toFixed(2) : '--';
+    const temperature = selectedContactData.temperature || '--';
+
+    if (chatTaxar) chatTaxar.textContent = taxar;
+    if (chatTemperature) chatTemperature.textContent = temperature;
 }
 
 // Render messages for selected contact
@@ -2182,6 +2223,7 @@ function selectContact(remoteJid, contactName, element) {
         renderDebugScheduledHint('');
     selectedContactData = contacts.find(c => c.remote_jid === resolvedRemote) || null;
     renderChatHeaderAvatar(selectedContactData);
+    renderChatHeaderDetails(); // Call here to update details immediately
     updateChatActions(true);
     console.log(logPrefix, 'selectContact', { remote: resolvedRemote, name: decodedName || formatRemoteJid(resolvedRemote) });
     chatContactName.textContent = decodedName || formatRemoteJid(resolvedRemote);

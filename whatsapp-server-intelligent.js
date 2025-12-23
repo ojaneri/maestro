@@ -18,6 +18,18 @@ const { exec } = require("child_process")
 const { fetch, Headers, Request, Response } = require("undici")
 const mysql = require("mysql2/promise")
 const { Readable } = require("stream")
+try {
+    const dotenv = require("dotenv")
+    dotenv.config()
+} catch (err) {
+    console.warn("[GLOBAL] dotenv não disponível:", err.message)
+}
+let googleApis = null
+try {
+    googleApis = require("googleapis")
+} catch (err) {
+    console.warn("[GLOBAL] Google APIs SDK não disponível:", err.message)
+}
 
 if (!Readable.fromWeb) {
     Readable.fromWeb = function (webStream) {
@@ -57,6 +69,16 @@ if (!fs.existsSync(REMOTE_CACHE_DIR)) {
 const QR_TOKEN_DIR = path.join(__dirname, "storage", "qr_tokens")
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "https://janeri.com.br/api/envio/wpp").replace(/\/+$/, "")
 const MAESTRO_LOGO_URL = `${PUBLIC_BASE_URL}/assets/maestro-logo.png`
+const GOOGLE_OAUTH_CLIENT_ID = process.env.GOOGLE_OAUTH_CLIENT_ID || ""
+const GOOGLE_OAUTH_CLIENT_SECRET = process.env.GOOGLE_OAUTH_CLIENT_SECRET || ""
+const GOOGLE_OAUTH_REDIRECT_URL = (process.env.GOOGLE_OAUTH_REDIRECT_URL || `${PUBLIC_BASE_URL}/api/calendar/oauth2/callback`).trim()
+const CALENDAR_TOKEN_SECRET = process.env.CALENDAR_TOKEN_SECRET || ""
+const CALENDAR_STATE_TTL_MS = 10 * 60 * 1000
+const GOOGLE_CALENDAR_SCOPES = [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/userinfo.email"
+]
+const CALENDAR_PENDING_VARIABLE_KEY = "calendar_pending_auth"
 
 // ===== FIX: garantir globalThis.crypto (Baileys exige WebCrypto) =====
 if (!globalThis.crypto) {
@@ -145,6 +167,129 @@ function generateQrAccessToken(instanceId) {
     return payload
 }
 
+const calendarOauthStates = new Map()
+
+function getCalendarEncryptionKey() {
+    if (!CALENDAR_TOKEN_SECRET) {
+        return null
+    }
+    return nodeCrypto.createHash("sha256").update(CALENDAR_TOKEN_SECRET, "utf8").digest()
+}
+
+function encryptCalendarToken(value) {
+    if (!value) return null
+    const key = getCalendarEncryptionKey()
+    if (!key) {
+        throw new Error("Chave CALENDAR_TOKEN_SECRET não configurada")
+    }
+    const iv = nodeCrypto.randomBytes(12)
+    const cipher = nodeCrypto.createCipheriv("aes-256-gcm", key, iv)
+    const encrypted = Buffer.concat([cipher.update(String(value), "utf8"), cipher.final()])
+    const tag = cipher.getAuthTag()
+    return `v1:${iv.toString("base64")}:${tag.toString("base64")}:${encrypted.toString("base64")}`
+}
+
+function decryptCalendarToken(value) {
+    if (!value) return null
+    const text = String(value)
+    if (!text.startsWith("v1:")) {
+        return text
+    }
+    const key = getCalendarEncryptionKey()
+    if (!key) {
+        throw new Error("Chave CALENDAR_TOKEN_SECRET não configurada")
+    }
+    const [, ivB64, tagB64, dataB64] = text.split(":")
+    const iv = Buffer.from(ivB64, "base64")
+    const tag = Buffer.from(tagB64, "base64")
+    const data = Buffer.from(dataB64, "base64")
+    const decipher = nodeCrypto.createDecipheriv("aes-256-gcm", key, iv)
+    decipher.setAuthTag(tag)
+    const decrypted = Buffer.concat([decipher.update(data), decipher.final()])
+    return decrypted.toString("utf8")
+}
+
+function cleanupExpiredCalendarStates(now = Date.now()) {
+    for (const [state, meta] of calendarOauthStates.entries()) {
+        if (!meta?.createdAt || now - meta.createdAt > CALENDAR_STATE_TTL_MS) {
+            calendarOauthStates.delete(state)
+        }
+    }
+}
+
+async function persistPendingCalendarAuth(instanceId, state) {
+    if (!instanceId || !state || !db) {
+        return
+    }
+    const tasks = []
+    if (typeof db.setPersistentVariable === "function") {
+        tasks.push(db.setPersistentVariable(instanceId, CALENDAR_PENDING_VARIABLE_KEY, JSON.stringify({
+            state: String(state),
+            createdAt: Date.now()
+        })))
+    }
+    if (typeof db.insertCalendarPendingState === "function") {
+        tasks.push(db.insertCalendarPendingState(instanceId, String(state), Date.now()))
+    }
+    if (typeof db.deleteExpiredCalendarPendingStates === "function") {
+        const cutoff = Date.now() - CALENDAR_STATE_TTL_MS
+        tasks.push(db.deleteExpiredCalendarPendingStates(cutoff))
+    }
+    try {
+        await Promise.all(tasks)
+    } catch (err) {
+        log("calendar pending persist error:", err.message)
+    }
+}
+
+async function clearPendingCalendarAuth(instanceId, state = null) {
+    if (!instanceId || !db) {
+        return
+    }
+    const tasks = []
+    if (typeof db.deletePersistentVariable === "function") {
+        tasks.push(db.deletePersistentVariable(instanceId, CALENDAR_PENDING_VARIABLE_KEY))
+    }
+    if (state && typeof db.deleteCalendarPendingState === "function") {
+        tasks.push(db.deleteCalendarPendingState(String(state)))
+    }
+    try {
+        await Promise.all(tasks)
+    } catch (err) {
+        log("calendar pending clear error:", err.message)
+    }
+}
+
+async function loadPendingCalendarAuth(instanceId) {
+    if (!instanceId || !db || typeof db.getPersistentVariable !== "function") {
+        return null
+    }
+    try {
+        const raw = await db.getPersistentVariable(instanceId, CALENDAR_PENDING_VARIABLE_KEY)
+        if (!raw) {
+            return null
+        }
+        const parsed = typeof raw === "string" ? JSON.parse(raw) : raw
+        if (parsed && parsed.state) {
+            const createdAt = Number(parsed.createdAt) || null
+            if (createdAt && Date.now() - createdAt > CALENDAR_STATE_TTL_MS) {
+                await clearPendingCalendarAuth(instanceId, parsed.state)
+                return null
+            }
+            return {
+                state: String(parsed.state),
+                createdAt
+            }
+        }
+        await clearPendingCalendarAuth(instanceId)
+        return null
+    } catch (err) {
+        log("calendar pending load error:", err.message)
+        await clearPendingCalendarAuth(instanceId)
+        return null
+    }
+}
+
 function escapeHtml(value) {
     if (value === null || value === undefined) return ""
     return String(value)
@@ -169,6 +314,211 @@ function formatIntervalMinutes(value) {
         return `${hours}h`
     }
     return `${hours}h ${remainder}m`
+}
+
+function parseCalendarDate(dateStr) {
+    const trimmed = (dateStr || "").trim()
+    if (!trimmed) {
+        throw new Error("calendar: data obrigatória")
+    }
+    let match = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(trimmed)
+    if (match) {
+        const day = Number(match[1])
+        const month = Number(match[2])
+        const year = Number(match[3])
+        return { day, month, year }
+    }
+    match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed)
+    if (match) {
+        const year = Number(match[1])
+        const month = Number(match[2])
+        const day = Number(match[3])
+        return { day, month, year }
+    }
+    throw new Error("calendar: data inválida (use DD/MM/AAAA ou AAAA-MM-DD)")
+}
+
+function parseCalendarTime(timeStr) {
+    const trimmed = (timeStr || "").trim()
+    if (!trimmed) {
+        throw new Error("calendar: hora obrigatória")
+    }
+    const match = /^(\d{2}):(\d{2})$/.exec(trimmed)
+    if (!match) {
+        throw new Error("calendar: hora inválida (use HH:MM)")
+    }
+    const hour = Number(match[1])
+    const minute = Number(match[2])
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+        throw new Error("calendar: hora inválida")
+    }
+    return { hour, minute }
+}
+
+function getTimeZoneOffsetMs(date, timeZone) {
+    const dtf = new Intl.DateTimeFormat("en-US", {
+        timeZone,
+        hour12: false,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+    })
+    const parts = dtf.formatToParts(date)
+    const values = Object.fromEntries(parts.map(part => [part.type, part.value]))
+    const asUtc = Date.UTC(
+        Number(values.year),
+        Number(values.month) - 1,
+        Number(values.day),
+        Number(values.hour),
+        Number(values.minute),
+        Number(values.second)
+    )
+    return asUtc - date.getTime()
+}
+
+function zonedTimeToUtcDate({ year, month, day, hour, minute, second = 0 }, timeZone) {
+    const utcDate = new Date(Date.UTC(year, month - 1, day, hour, minute, second))
+    const offsetMs = getTimeZoneOffsetMs(utcDate, timeZone)
+    return new Date(utcDate.getTime() - offsetMs)
+}
+
+function parseCalendarDateTime(dateArg, timeArg, timeZone) {
+    const trimmed = (dateArg || "").trim()
+    if (!trimmed) {
+        throw new Error("calendar: data/hora obrigatória")
+    }
+    const hasTime = /\d{2}:\d{2}/.test(trimmed)
+    if (hasTime && !timeArg) {
+        let match = /^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})$/.exec(trimmed)
+        if (match) {
+            const day = Number(match[1])
+            const month = Number(match[2])
+            const year = Number(match[3])
+            const hour = Number(match[4])
+            const minute = Number(match[5])
+            const tz = timeZone || "America/Fortaleza"
+            return zonedTimeToUtcDate({ year, month, day, hour, minute }, tz)
+        }
+        match = /^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$/.exec(trimmed)
+        if (match) {
+            const year = Number(match[1])
+            const month = Number(match[2])
+            const day = Number(match[3])
+            const hour = Number(match[4])
+            const minute = Number(match[5])
+            const tz = timeZone || "America/Fortaleza"
+            return zonedTimeToUtcDate({ year, month, day, hour, minute }, tz)
+        }
+        const parsed = new Date(trimmed)
+        if (!Number.isNaN(parsed.getTime())) {
+            return parsed
+        }
+    }
+    const { day, month, year } = parseCalendarDate(trimmed)
+    const { hour, minute } = parseCalendarTime(timeArg)
+    const tz = timeZone || "America/Fortaleza"
+    return zonedTimeToUtcDate({ year, month, day, hour, minute }, tz)
+}
+
+function parseAvailabilityJson(value) {
+    if (!value) return null
+    try {
+        const parsed = JSON.parse(value)
+        return parsed && typeof parsed === "object" ? parsed : null
+    } catch {
+        return null
+    }
+}
+
+function getWeekdayKey(date, timeZone) {
+    const formatter = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "short" })
+    const day = formatter.format(date).toLowerCase()
+    const map = {
+        mon: "mon",
+        tue: "tue",
+        wed: "wed",
+        thu: "thu",
+        fri: "fri",
+        sat: "sat",
+        sun: "sun"
+    }
+    const normalized = day.slice(0, 3)
+    return map[normalized] || normalized
+}
+
+function getLocalTimeParts(date, timeZone) {
+    const formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone,
+        hour12: false,
+        hour: "2-digit",
+        minute: "2-digit"
+    })
+    const parts = formatter.formatToParts(date)
+    const values = Object.fromEntries(parts.map(part => [part.type, part.value]))
+    return { hour: Number(values.hour), minute: Number(values.minute) }
+}
+
+function toMinutesOfDay({ hour, minute }) {
+    return hour * 60 + minute
+}
+
+function normalizeAvailability(availability) {
+    if (!availability || typeof availability !== "object") {
+        return null
+    }
+    const days = availability.days && typeof availability.days === "object" ? availability.days : null
+    if (!days) {
+        return null
+    }
+    return {
+        timezone: availability.timezone || null,
+        buffer_minutes: Number(availability.buffer_minutes || 0),
+        min_notice_minutes: Number(availability.min_notice_minutes || 0),
+        step_minutes: Number(availability.step_minutes || 30),
+        days
+    }
+}
+
+function isSlotWithinAvailability(startUtc, endUtc, availability, fallbackTimeZone) {
+    const normalized = normalizeAvailability(availability)
+    if (!normalized) return true
+    const timeZone = normalized.timezone || fallbackTimeZone || "America/Fortaleza"
+    const weekday = getWeekdayKey(startUtc, timeZone)
+    const windows = normalized.days[weekday] || normalized.days.all || null
+    if (!Array.isArray(windows) || windows.length === 0) {
+        return false
+    }
+    const startParts = getLocalTimeParts(startUtc, timeZone)
+    const endParts = getLocalTimeParts(endUtc, timeZone)
+    const startMinutes = toMinutesOfDay(startParts)
+    const endMinutes = toMinutesOfDay(endParts)
+    const buffer = Math.max(0, normalized.buffer_minutes || 0)
+    if (normalized.min_notice_minutes && startUtc.getTime() < Date.now() + normalized.min_notice_minutes * 60000) {
+        return false
+    }
+    for (const window of windows) {
+        let startWindow
+        let endWindow
+        try {
+            startWindow = parseCalendarTime(window.start || "")
+            endWindow = parseCalendarTime(window.end || "")
+        } catch {
+            continue
+        }
+        const windowStart = toMinutesOfDay(startWindow) + buffer
+        const windowEnd = toMinutesOfDay(endWindow) - buffer
+        if (startMinutes >= windowStart && endMinutes <= windowEnd) {
+            return true
+        }
+    }
+    return false
+}
+
+function slotsOverlap(slotStart, slotEnd, busyStart, busyEnd) {
+    return slotStart < busyEnd && slotEnd > busyStart
 }
 
 function collectAlarmDebugInfo(eventKey, meta) {
@@ -207,6 +557,169 @@ function replaceStatusPlaceholder(text, statusName) {
     }
     const replacement = statusName ? statusName.trim() : ""
     return text.replace(/%statusname%/gi, replacement)
+}
+
+function splitHashSegments(value) {
+    if (!value) {
+        return []
+    }
+    return String(value)
+        .split("#")
+        .map(part => part.trim())
+        .filter(Boolean)
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, Math.max(0, Math.floor(ms))))
+}
+
+function isNighttime() {
+    const now = new Date();
+    const saoPauloFormatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Sao_Paulo',
+        hour: 'numeric',
+        hour12: false
+    });
+    const hour = parseInt(saoPauloFormatter.format(now));
+    return hour >= 20 || hour < 7;
+}
+
+function getNextNightActionTime() {
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Sao_Paulo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        hour12: false
+    });
+    const parts = formatter.formatToParts(now);
+    const year = parseInt(parts.find(p => p.type === 'year').value);
+    const month = parseInt(parts.find(p => p.type === 'month').value);
+    const day = parseInt(parts.find(p => p.type === 'day').value);
+    const hour = parseInt(parts.find(p => p.type === 'hour').value);
+    let targetHour;
+    if (hour >= 20 || hour < 7) {
+        targetHour = 7;
+    } else {
+        targetHour = 20;
+    }
+    let utcTarget = zonedTimeToUtcDate({ year, month, day, hour: targetHour, minute: 0, second: 0 }, 'America/Sao_Paulo');
+    if (utcTarget <= now) {
+        const nextDay = new Date(now);
+        nextDay.setDate(now.getDate() + 1);
+        const nextParts = formatter.formatToParts(nextDay);
+        const nextYear = parseInt(nextParts.find(p => p.type === 'year').value);
+        const nextMonth = parseInt(nextParts.find(p => p.type === 'month').value);
+        const nextDayNum = parseInt(nextParts.find(p => p.type === 'day').value);
+        utcTarget = zonedTimeToUtcDate({ year: nextYear, month: nextMonth, day: nextDayNum, hour: targetHour, minute: 0, second: 0 }, 'America/Sao_Paulo');
+    }
+    return utcTarget;
+}
+
+let nextScheduledAction = null;
+
+function scheduleNightAction() {
+    const targetTime = getNextNightActionTime();
+    const delay = targetTime - Date.now();
+    if (nextScheduledAction) clearTimeout(nextScheduledAction);
+    nextScheduledAction = setTimeout(() => {
+        if (isNighttime()) {
+            if (!whatsappConnected) {
+                startWhatsApp().catch(err => log("Erro ao reconectar no horário:", err.message));
+            }
+        } else {
+            if (whatsappConnected) {
+                logoutWhatsApp().catch(err => log("Erro ao desconectar no horário:", err.message));
+            }
+        }
+        scheduleNightAction();
+    }, delay);
+}
+
+function computeTypingDelayMs(text) {
+    const normalized = (text || "").trim();
+    if (!normalized) {
+        return 0;
+    }
+    const charCount = normalized.length;
+    const seconds = Math.min(10, Math.max(1, Math.ceil(charCount / 20)));
+    // Adiciona um fator aleatório de até 1.2 segundos para simular digitação humana
+    const randomFactor = Math.random() * 1200 + 200;
+    return seconds * 1000 + randomFactor;
+}
+
+function calculateTemperatureDelay(temperature) {
+    let baseDelay = 0;
+    let randomDelay = 0;
+
+    switch (temperature) {
+        case 'cold':
+            baseDelay = 5000; // 5 seconds base delay
+            randomDelay = Math.random() * 3000 + 1000; // 1 to 4 seconds random
+            break;
+        case 'warm':
+            baseDelay = 2000; // 2 seconds base delay
+            randomDelay = Math.random() * 1500 + 500; // 0.5 to 2 seconds random
+            break;
+        case 'hot':
+            baseDelay = 500; // 0.5 seconds base delay
+            randomDelay = Math.random() * 500 + 100; // 0.1 to 0.6 seconds random
+            break;
+        default:
+            baseDelay = 1000; // Default to warm if not set
+            randomDelay = Math.random() * 1000 + 200; // 0.2 to 1.2 seconds random
+            break;
+    }
+    return baseDelay + randomDelay;
+}
+
+function determineTemperature(inboundCount, outboundCount) {
+    if (outboundCount === 0) {
+        return 'cold'; // Cannot calculate taxar if no messages sent, default to cold
+    }
+    const taxar = (inboundCount / outboundCount) * 100;
+
+    if (taxar >= 70) {
+        return 'hot';
+    } else if (taxar >= 30) {
+        return 'warm';
+    } else {
+        return 'cold';
+    }
+}
+
+async function sendPresenceSafely(status, remoteJid) {
+    if (!remoteJid || !sock || !whatsappConnected) {
+        return
+    }
+    if (typeof sock.sendPresenceUpdate !== "function") {
+        return
+    }
+    try {
+        await sock.sendPresenceUpdate(status, remoteJid)
+    } catch {
+        // ignore presence errors
+    }
+}
+
+async function simulateTypingIndicator(remoteJid, text, temperature = 'warm') {
+    if (!remoteJid || !sock || !whatsappConnected) {
+        return
+    }
+    const typingDelay = computeTypingDelayMs(text);
+    const temperatureDelay = calculateTemperatureDelay(temperature);
+    const totalDelayMs = typingDelay + temperatureDelay;
+
+    if (totalDelayMs <= 0) {
+        return
+    }
+    await sendPresenceSafely("available", remoteJid)
+    await sendPresenceSafely("composing", remoteJid)
+    await sleep(totalDelayMs) // Use totalDelayMs here
+    await sendPresenceSafely("paused", remoteJid)
+    await sendPresenceSafely("available", remoteJid)
 }
 
 async function resolveContactStatusName(remoteJid) {
@@ -491,6 +1004,10 @@ let connectionStatus = "starting" // "starting" | "qr" | "connected" | "disconne
 let lastConnectionError = null
 let sock = null
 let restarting = false
+const groupMetadataCache = new Map()
+const recentOutgoingText = new Map()
+const RECENT_OUTGOING_TTL_MS = 15000
+const RECENT_OUTGOING_LIMIT = 1000
 
 // ===== EXPRESS + HTTP + WS =====
 const app = express()
@@ -703,6 +1220,61 @@ function isIndividualJid(remoteJid) {
     return !remoteJid.includes("@g.us") && !remoteJid.includes("@broadcast")
 }
 
+function isGroupJid(remoteJid) {
+    return typeof remoteJid === "string" && remoteJid.includes("@g.us")
+}
+
+function getSelfJid() {
+    const raw = sock?.user?.id || ""
+    return raw ? raw.split(":")[0] : ""
+}
+
+function extractInboundMessageText(message) {
+    if (!message) return ""
+    const text = message.conversation
+        || message.extendedTextMessage?.text
+        || message.imageMessage?.caption
+        || message.videoMessage?.caption
+        || message.documentMessage?.caption
+        || ""
+    if (text) return String(text).trim()
+    if (message.audioMessage) return "ÁUDIO RECEBIDO"
+    if (message.imageMessage) return "IMAGEM RECEBIDA"
+    if (message.videoMessage) return "VÍDEO RECEBIDO"
+    if (message.documentMessage) return "DOCUMENTO RECEBIDO"
+    return ""
+}
+
+function getMentionedJids(message) {
+    if (!message) return []
+    const context = message.extendedTextMessage?.contextInfo
+        || message.imageMessage?.contextInfo
+        || message.videoMessage?.contextInfo
+        || message.documentMessage?.contextInfo
+        || message.contextInfo
+    const mentioned = context?.mentionedJid
+    return Array.isArray(mentioned) ? mentioned : []
+}
+
+async function getGroupMetadata(groupJid) {
+    if (!groupJid) return null
+    if (groupMetadataCache.has(groupJid)) {
+        return groupMetadataCache.get(groupJid)
+    }
+    if (!sock || typeof sock.groupMetadata !== "function") {
+        return null
+    }
+    try {
+        const meta = await sock.groupMetadata(groupJid)
+        if (meta) {
+            groupMetadataCache.set(groupJid, meta)
+        }
+        return meta || null
+    } catch (err) {
+        return null
+    }
+}
+
 function unescapeCommandString(value) {
     return value.replace(/\\(.)/g, (_, char) => {
         switch (char) {
@@ -737,6 +1309,12 @@ const assistantFunctionNames = [
     "apagar_agendas_por_tag",
     "apagar_agendas_por_tipo",
     "cancelar_e_agendar2",
+    "verificar_disponibilidade",
+    "sugerir_horarios",
+    "marcar_evento",
+    "remarcar_evento",
+    "desmarcar_evento",
+    "listar_eventos",
     "set_estado",
     "get_estado",
     "set_contexto",
@@ -1134,8 +1712,48 @@ async function sendWhatsAppMessage(jid, payload) {
                         ? "contact"
                         : "other"
     })
+    const textPayload = (payload?.text || "").trim()
+    if (textPayload) {
+        let contactTemperature = 'warm'; // Default temperature
+        try {
+            const contactMetadata = await db.getContactMetadata(INSTANCE_ID, jid);
+            if (contactMetadata && contactMetadata.temperature) {
+                contactTemperature = contactMetadata.temperature;
+            } else {
+                // If temperature not explicitly set, calculate based on taxar
+                const inboundCount = await db.getInboundMessageCount(INSTANCE_ID, jid);
+                const outboundCount = await db.getOutboundMessageCount(INSTANCE_ID, jid);
+                contactTemperature = determineTemperature(inboundCount, outboundCount);
+                // Optionally, save the determined temperature back to the database
+                if (db && typeof db.saveContactMetadata === 'function') {
+                    await db.saveContactMetadata(INSTANCE_ID, jid, null, null, null, contactTemperature);
+                }
+            }
+        } catch (err) {
+            log("Error fetching or determining contact temperature:", err.message);
+            // Fallback to default 'warm' temperature if there's an error
+            contactTemperature = 'warm';
+        }
+        await simulateTypingIndicator(jid, textPayload, contactTemperature);
+    }
     await ensureWhatsAppRecipientExists(jid)
     const result = await sock.sendMessage(jid, payload)
+    const text = (payload?.text || "").trim()
+    if (text) {
+        const key = `${jid}|${text}`
+        recentOutgoingText.set(key, Date.now())
+        if (recentOutgoingText.size > RECENT_OUTGOING_LIMIT) {
+            const cutoff = Date.now() - RECENT_OUTGOING_TTL_MS
+            for (const [entryKey, ts] of recentOutgoingText.entries()) {
+                if (ts < cutoff) {
+                    recentOutgoingText.delete(entryKey)
+                }
+                if (recentOutgoingText.size <= RECENT_OUTGOING_LIMIT) {
+                    break
+                }
+            }
+        }
+    }
     log("flow.send.done", { jid })
     return result
 }
@@ -1202,6 +1820,288 @@ async function fetchWebCommand(url) {
     }
     const text = await response.text()
     return text.slice(0, 1200)
+}
+
+function assertCalendarSdk() {
+    if (!googleApis || !googleApis.google) {
+        throw new Error("Google Calendar SDK não instalado")
+    }
+    if (!GOOGLE_OAUTH_CLIENT_ID || !GOOGLE_OAUTH_CLIENT_SECRET) {
+        throw new Error("Credenciais Google OAuth ausentes (GOOGLE_OAUTH_CLIENT_ID/SECRET)")
+    }
+    if (!GOOGLE_OAUTH_REDIRECT_URL) {
+        throw new Error("GOOGLE_OAUTH_REDIRECT_URL não configurada")
+    }
+}
+
+function buildGoogleOAuthClient() {
+    assertCalendarSdk()
+    return new googleApis.google.auth.OAuth2(
+        GOOGLE_OAUTH_CLIENT_ID,
+        GOOGLE_OAUTH_CLIENT_SECRET,
+        GOOGLE_OAUTH_REDIRECT_URL
+    )
+}
+
+async function loadCalendarAccount(instanceId) {
+    if (!db || typeof db.getCalendarAccount !== "function") {
+        throw new Error("calendar: banco indisponível")
+    }
+    const account = await db.getCalendarAccount(instanceId)
+    if (!account || !account.refresh_token) {
+        throw new Error("calendar: integração não conectada")
+    }
+    return account
+}
+
+async function resolveCalendarConfig(instanceId, calendarIdArg) {
+    if (!db || typeof db.listCalendarConfigs !== "function") {
+        throw new Error("calendar: banco indisponível")
+    }
+    const calendarId = (calendarIdArg || "").trim()
+    const configs = await db.listCalendarConfigs(instanceId)
+    let config = null
+    if (calendarId) {
+        if (calendarId === 'primary') {
+            config = configs.find(item => item.is_default) || configs[0] || null
+            if (!config) {
+                throw new Error(`calendar: nenhum calendário configurado`)
+            }
+        } else {
+            config = configs.find(item => item.calendar_id === calendarId) || null
+            if (!config) {
+                throw new Error(`calendar: calendar_id ${calendarId} não configurado`)
+            }
+        }
+    } else {
+        config = configs.find(item => item.is_default) || configs[0] || null
+    }
+    if (!config) {
+        return {
+            calendar_id: "primary",
+            timezone: null,
+            availability: null
+        }
+    }
+    return {
+        calendar_id: config.calendar_id,
+        timezone: config.timezone || null,
+        availability: parseAvailabilityJson(config.availability_json)
+    }
+}
+
+async function getCalendarService(instanceId) {
+    const account = await loadCalendarAccount(instanceId)
+    const oauth2Client = buildGoogleOAuthClient()
+    const credentials = {
+        refresh_token: decryptCalendarToken(account.refresh_token),
+        access_token: decryptCalendarToken(account.access_token),
+        expiry_date: account.token_expiry || undefined
+    }
+    oauth2Client.setCredentials(credentials)
+    oauth2Client.on("tokens", async tokens => {
+        const payload = {
+            calendar_email: account.calendar_email || null,
+            scope: account.scope || null
+        }
+        if (tokens.access_token) {
+            payload.access_token = encryptCalendarToken(tokens.access_token)
+        }
+        if (tokens.refresh_token) {
+            payload.refresh_token = encryptCalendarToken(tokens.refresh_token)
+        }
+        if (tokens.expiry_date) {
+            payload.token_expiry = tokens.expiry_date
+        }
+        try {
+            await db.upsertCalendarAccount(instanceId, payload)
+        } catch (err) {
+            log("calendar token refresh save error:", err.message)
+        }
+    })
+    const calendar = googleApis.google.calendar({ version: "v3", auth: oauth2Client })
+    return { calendar, oauth2Client, account }
+}
+
+async function fetchBusySlots(calendar, calendarId, timeMin, timeMax) {
+    const response = await calendar.freebusy.query({
+        requestBody: {
+            timeMin: timeMin.toISOString(),
+            timeMax: timeMax.toISOString(),
+            items: [{ id: calendarId }]
+        }
+    })
+    const calendars = response.data.calendars || {}
+    const busy = calendars[calendarId]?.busy || []
+    return busy.map(entry => ({
+        start: new Date(entry.start),
+        end: new Date(entry.end)
+    }))
+}
+
+async function ensureCalendarConnection(instanceId) {
+    if (!CALENDAR_TOKEN_SECRET) {
+        throw new Error("calendar: CALENDAR_TOKEN_SECRET não configurada")
+    }
+    if (!googleApis || !googleApis.google) {
+        throw new Error("calendar: Google SDK não disponível")
+    }
+    await loadCalendarAccount(instanceId)
+}
+
+function formatDateTimeInTimeZone(date, timeZone) {
+    const formatter = new Intl.DateTimeFormat("pt-BR", {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false
+    })
+    return formatter.format(date)
+}
+
+function formatCalendarDateTime(date, timeZone) {
+    const formatter = new Intl.DateTimeFormat("en-CA", {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false
+    })
+    const parts = formatter.formatToParts(date)
+    const values = Object.fromEntries(parts.map(part => [part.type, part.value]))
+    return `${values.year}-${values.month}-${values.day}T${values.hour}:${values.minute}:${values.second}`
+}
+
+function parseWindowRange(windowStr) {
+    const trimmed = (windowStr || "").trim()
+    const match = /^(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})$/.exec(trimmed)
+    if (!match) {
+        throw new Error("calendar: janela inválida (use HH:MM-HH:MM)")
+    }
+    return { start: match[1], end: match[2] }
+}
+
+function parseCalendarSlotArgs(args, timeZoneFallback) {
+    const [arg1, arg2, arg3, arg4, arg5] = args
+    const a1 = (arg1 || "").trim()
+    const a2 = (arg2 || "").trim()
+    const a3 = (arg3 || "").trim()
+    const a4 = (arg4 || "").trim()
+    const a5 = (arg5 || "").trim()
+    if (a1 && a2 && /^[0-9]+$/.test(a2)) {
+        const timeZone = a4 || timeZoneFallback
+        const start = parseCalendarDateTime(a1, null, timeZone)
+        const duration = Number(a2)
+        return {
+            start,
+            end: new Date(start.getTime() + duration * 60000),
+            duration,
+            calendarId: a3 || null,
+            timeZone: timeZone || null
+        }
+    }
+    if (a1 && a2 && a3 && /^[0-9]+$/.test(a3)) {
+        const timeZone = a5 || timeZoneFallback
+        const start = parseCalendarDateTime(a1, a2, timeZone)
+        const duration = Number(a3)
+        return {
+            start,
+            end: new Date(start.getTime() + duration * 60000),
+            duration,
+            calendarId: a4 || null,
+            timeZone: timeZone || null
+        }
+    }
+    if (a1 && a2) {
+        const timeZone = a4 || timeZoneFallback
+        const start = parseCalendarDateTime(a1, null, timeZone)
+        const end = parseCalendarDateTime(a2, null, timeZone)
+        return {
+            start,
+            end,
+            duration: null,
+            calendarId: a3 || null,
+            timeZone: timeZone || null
+        }
+    }
+    throw new Error("calendar: informe inicio e fim ou duração")
+}
+
+async function calendarCheckAvailability(instanceId, start, end, calendarIdArg, timeZoneArg) {
+    const { calendar } = await getCalendarService(instanceId)
+    const config = await resolveCalendarConfig(instanceId, calendarIdArg)
+    const timeZone = timeZoneArg || config.timezone || "America/Fortaleza"
+    const busySlots = await fetchBusySlots(calendar, config.calendar_id, start, end)
+    const hasBusy = busySlots.some(entry => slotsOverlap(start, end, entry.start, entry.end))
+    const allowed = isSlotWithinAvailability(start, end, config.availability, timeZone)
+    return {
+        available: !hasBusy && allowed,
+        timeZone,
+        calendarId: config.calendar_id,
+        busyCount: busySlots.length,
+        busySlots
+    }
+}
+
+async function calendarSuggestSlots(instanceId, dateArg, windowArg, durationMinutes, limitArg, calendarIdArg, timeZoneArg) {
+    const config = await resolveCalendarConfig(instanceId, calendarIdArg)
+    const timeZone = timeZoneArg || config.timezone || "America/Fortaleza"
+    const { start: windowStart, end: windowEnd } = parseWindowRange(windowArg)
+    const { day, month, year } = parseCalendarDate(dateArg)
+    const startTime = parseCalendarTime(windowStart)
+    const endTime = parseCalendarTime(windowEnd)
+    const windowStartDate = zonedTimeToUtcDate({ year, month, day, hour: startTime.hour, minute: startTime.minute }, timeZone)
+    const windowEndDate = zonedTimeToUtcDate({ year, month, day, hour: endTime.hour, minute: endTime.minute }, timeZone)
+    if (windowEndDate <= windowStartDate) {
+        throw new Error("calendar: janela inválida")
+    }
+    const duration = Math.max(1, Number(durationMinutes || 30))
+    const limit = Math.max(1, Number(limitArg || 5))
+    const availability = config.availability
+    const stepMinutes = normalizeAvailability(availability)?.step_minutes || 30
+    const { calendar } = await getCalendarService(instanceId)
+    const busySlots = await fetchBusySlots(calendar, config.calendar_id, windowStartDate, windowEndDate)
+    const suggestions = []
+    for (let cursor = new Date(windowStartDate); cursor.getTime() + duration * 60000 <= windowEndDate.getTime(); cursor = new Date(cursor.getTime() + stepMinutes * 60000)) {
+        const slotStart = new Date(cursor)
+        const slotEnd = new Date(cursor.getTime() + duration * 60000)
+        if (!isSlotWithinAvailability(slotStart, slotEnd, availability, timeZone)) {
+            continue
+        }
+        const overlaps = busySlots.some(entry => slotsOverlap(slotStart, slotEnd, entry.start, entry.end))
+        if (overlaps) {
+            continue
+        }
+        suggestions.push({
+            start: slotStart.toISOString(),
+            end: slotEnd.toISOString(),
+            local_start: formatDateTimeInTimeZone(slotStart, timeZone),
+            local_end: formatDateTimeInTimeZone(slotEnd, timeZone)
+        })
+        if (suggestions.length >= limit) {
+            break
+        }
+    }
+    return {
+        timeZone,
+        calendarId: config.calendar_id,
+        durationMinutes: duration,
+        suggestions
+    }
+}
+
+function parseAttendees(input) {
+    if (!input) return []
+    const raw = String(input)
+    const parts = raw.split(/[,;]+/).map(item => item.trim()).filter(Boolean)
+    return parts.map(email => ({ email }))
 }
 
 async function handleAssistantCommands(remoteJid, aiText, providedConfig = null, options = { allowBoomerang: true }) {
@@ -1384,6 +2284,221 @@ async function handleAssistantCommands(remoteJid, aiText, providedConfig = null,
                         newScheduledAt: annotation.scheduledAt,
                         tag,
                         tipo
+                    })
+                    break
+                }
+                case "verificar_disponibilidade": {
+                    await ensureCalendarConnection(INSTANCE_ID)
+                    const slot = parseCalendarSlotArgs(command.args || [], null)
+                    if (slot.end <= slot.start) {
+                        throw new Error("calendar: horário inválido")
+                    }
+                    const availability = await calendarCheckAvailability(
+                        INSTANCE_ID,
+                        slot.start,
+                        slot.end,
+                        slot.calendarId,
+                        slot.timeZone
+                    )
+                    const note = availability.available
+                        ? "Horário disponível no Google Calendar"
+                        : "Horário indisponível no Google Calendar"
+                    functionNotes.push(note)
+                    result = buildFunctionResult(true, "OK", note, {
+                        available: availability.available,
+                        calendarId: availability.calendarId,
+                        timeZone: availability.timeZone,
+                        start: slot.start.toISOString(),
+                        end: slot.end.toISOString(),
+                        local_start: formatDateTimeInTimeZone(slot.start, availability.timeZone),
+                        local_end: formatDateTimeInTimeZone(slot.end, availability.timeZone),
+                        busyCount: availability.busyCount
+                    })
+                    break
+                }
+                case "sugerir_horarios": {
+                    await ensureCalendarConnection(INSTANCE_ID)
+                    const dateArg = (command.args[0] || "").trim()
+                    const windowArg = (command.args[1] || "").trim()
+                    const durationArg = (command.args[2] || "").trim()
+                    const limitArg = (command.args[3] || "").trim()
+                    const calendarIdArg = (command.args[4] || "").trim()
+                    const timeZoneArg = (command.args[5] || "").trim()
+                    if (!dateArg || !windowArg) {
+                        throw new Error("sugerir_horarios(): data e janela são obrigatórias")
+                    }
+                    const payload = await calendarSuggestSlots(
+                        INSTANCE_ID,
+                        dateArg,
+                        windowArg,
+                        durationArg,
+                        limitArg,
+                        calendarIdArg,
+                        timeZoneArg
+                    )
+                    const note = payload.suggestions.length
+                        ? `Sugestões encontradas: ${payload.suggestions.length}`
+                        : "Nenhum horário disponível"
+                    functionNotes.push(note)
+                    result = buildFunctionResult(true, "OK", note, payload)
+                    break
+                }
+                case "marcar_evento": {
+                    await ensureCalendarConnection(INSTANCE_ID)
+                    const title = (command.args[0] || "").trim()
+                    const startArg = (command.args[1] || "").trim()
+                    const endArg = (command.args[2] || "").trim()
+                    const attendeesArg = (command.args[3] || "").trim()
+                    const description = (command.args[4] || "").trim()
+                    const calendarIdArg = (command.args[5] || "").trim()
+                    const timeZoneArg = (command.args[6] || "").trim()
+                    if (!title || !startArg || !endArg) {
+                        throw new Error("marcar_evento(): título, início e fim são obrigatórios")
+                    }
+                    const config = await resolveCalendarConfig(INSTANCE_ID, calendarIdArg)
+                    const timeZone = timeZoneArg || config.timezone || "America/Fortaleza"
+                    const start = parseCalendarDateTime(startArg, null, timeZone)
+                    const end = parseCalendarDateTime(endArg, null, timeZone)
+                    if (end <= start) {
+                        throw new Error("marcar_evento(): horário inválido")
+                    }
+                    if (!isSlotWithinAvailability(start, end, config.availability, timeZone)) {
+                        throw new Error("marcar_evento(): horário fora da disponibilidade configurada")
+                    }
+                    const { calendar } = await getCalendarService(INSTANCE_ID)
+                    const event = {
+                        summary: title,
+                        description: description || undefined,
+                        start: {
+                            dateTime: formatCalendarDateTime(start, timeZone),
+                            timeZone
+                        },
+                        end: {
+                            dateTime: formatCalendarDateTime(end, timeZone),
+                            timeZone
+                        },
+                        attendees: parseAttendees(attendeesArg)
+                    }
+                    const response = await calendar.events.insert({
+                        calendarId: config.calendar_id,
+                        requestBody: event
+                    })
+                    const created = response.data || {}
+                    const note = "Evento criado no Google Calendar"
+                    functionNotes.push(note)
+                    result = buildFunctionResult(true, "OK", note, {
+                        calendarId: config.calendar_id,
+                        eventId: created.id,
+                        htmlLink: created.htmlLink || null,
+                        start: start.toISOString(),
+                        end: end.toISOString(),
+                        local_start: formatDateTimeInTimeZone(start, timeZone),
+                        local_end: formatDateTimeInTimeZone(end, timeZone)
+                    })
+                    break
+                }
+                case "remarcar_evento": {
+                    await ensureCalendarConnection(INSTANCE_ID)
+                    const eventId = (command.args[0] || "").trim()
+                    const startArg = (command.args[1] || "").trim()
+                    const endArg = (command.args[2] || "").trim()
+                    const calendarIdArg = (command.args[3] || "").trim()
+                    const timeZoneArg = (command.args[4] || "").trim()
+                    if (!eventId || !startArg || !endArg) {
+                        throw new Error("remarcar_evento(): id, início e fim são obrigatórios")
+                    }
+                    const config = await resolveCalendarConfig(INSTANCE_ID, calendarIdArg)
+                    const timeZone = timeZoneArg || config.timezone || "America/Fortaleza"
+                    const start = parseCalendarDateTime(startArg, null, timeZone)
+                    const end = parseCalendarDateTime(endArg, null, timeZone)
+                    if (end <= start) {
+                        throw new Error("remarcar_evento(): horário inválido")
+                    }
+                    if (!isSlotWithinAvailability(start, end, config.availability, timeZone)) {
+                        throw new Error("remarcar_evento(): horário fora da disponibilidade configurada")
+                    }
+                    const { calendar } = await getCalendarService(INSTANCE_ID)
+                    const response = await calendar.events.patch({
+                        calendarId: config.calendar_id,
+                        eventId,
+                        requestBody: {
+                            start: { dateTime: formatCalendarDateTime(start, timeZone), timeZone },
+                            end: { dateTime: formatCalendarDateTime(end, timeZone), timeZone }
+                        }
+                    })
+                    const updated = response.data || {}
+                    const note = "Evento remarcado no Google Calendar"
+                    functionNotes.push(note)
+                    result = buildFunctionResult(true, "OK", note, {
+                        calendarId: config.calendar_id,
+                        eventId: updated.id,
+                        htmlLink: updated.htmlLink || null,
+                        start: start.toISOString(),
+                        end: end.toISOString(),
+                        local_start: formatDateTimeInTimeZone(start, timeZone),
+                        local_end: formatDateTimeInTimeZone(end, timeZone)
+                    })
+                    break
+                }
+                case "desmarcar_evento": {
+                    await ensureCalendarConnection(INSTANCE_ID)
+                    const eventId = (command.args[0] || "").trim()
+                    const calendarIdArg = (command.args[1] || "").trim()
+                    if (!eventId) {
+                        throw new Error("desmarcar_evento(): id obrigatório")
+                    }
+                    const config = await resolveCalendarConfig(INSTANCE_ID, calendarIdArg)
+                    const { calendar } = await getCalendarService(INSTANCE_ID)
+                    await calendar.events.delete({
+                        calendarId: config.calendar_id,
+                        eventId
+                    })
+                    const note = "Evento cancelado no Google Calendar"
+                    functionNotes.push(note)
+                    result = buildFunctionResult(true, "OK", note, {
+                        calendarId: config.calendar_id,
+                        eventId
+                    })
+                    break
+                }
+                case "listar_eventos": {
+                    await ensureCalendarConnection(INSTANCE_ID)
+                    const startArg = (command.args[0] || "").trim()
+                    const endArg = (command.args[1] || "").trim()
+                    const calendarIdArg = (command.args[2] || "").trim()
+                    const timeZoneArg = (command.args[3] || "").trim()
+                    if (!startArg || !endArg) {
+                        throw new Error("listar_eventos(): início e fim são obrigatórios")
+                    }
+                    const config = await resolveCalendarConfig(INSTANCE_ID, calendarIdArg)
+                    const timeZone = timeZoneArg || config.timezone || "America/Fortaleza"
+                    const start = parseCalendarDateTime(startArg, null, timeZone)
+                    const end = parseCalendarDateTime(endArg, null, timeZone)
+                    if (end <= start) {
+                        throw new Error("listar_eventos(): intervalo inválido")
+                    }
+                    const { calendar } = await getCalendarService(INSTANCE_ID)
+                    const response = await calendar.events.list({
+                        calendarId: config.calendar_id,
+                        timeMin: start.toISOString(),
+                        timeMax: end.toISOString(),
+                        singleEvents: true,
+                        orderBy: "startTime"
+                    })
+                    const items = Array.isArray(response.data.items) ? response.data.items : []
+                    const events = items.map(item => ({
+                        id: item.id,
+                        summary: item.summary || "",
+                        start: item.start?.dateTime || item.start?.date || null,
+                        end: item.end?.dateTime || item.end?.date || null,
+                        htmlLink: item.htmlLink || null
+                    }))
+                    const note = `Eventos encontrados: ${events.length}`
+                    functionNotes.push(note)
+                    result = buildFunctionResult(true, "OK", note, {
+                        calendarId: config.calendar_id,
+                        timeZone,
+                        events
                     })
                     break
                 }
@@ -1600,7 +2715,8 @@ async function processScheduledMessages() {
 
     try {
         const dueMessages = await db.fetchDueScheduledMessages(INSTANCE_ID, SCHEDULE_FETCH_LIMIT)
-        if (!dueMessages.length) {
+        const dueGroupMessages = await db.fetchDueGroupScheduledMessages(INSTANCE_ID, SCHEDULE_FETCH_LIMIT)
+        if (!dueMessages.length && !dueGroupMessages.length) {
             return
         }
 
@@ -1613,6 +2729,18 @@ async function processScheduledMessages() {
             } catch (err) {
                 await db.updateScheduledMessageStatus(job.id, "failed", err.message)
                 log("Erro ao enviar mensagem agendada", job.id, err.message)
+            }
+        }
+
+        for (const job of dueGroupMessages) {
+            try {
+                await sendWhatsAppMessage(job.group_jid, { text: job.message })
+                await db.saveGroupMessage(INSTANCE_ID, job.group_jid, getSelfJid(), "outbound", job.message, JSON.stringify({ scheduled: true }))
+                await db.updateGroupScheduledMessageStatus(job.id, "sent")
+                log("Mensagem agendada enviada para grupo", job.group_jid, job.scheduled_at)
+            } catch (err) {
+                await db.updateGroupScheduledMessageStatus(job.id, "failed", err.message)
+                log("Erro ao enviar mensagem agendada de grupo", job.id, err.message)
             }
         }
     } catch (err) {
@@ -1771,6 +2899,69 @@ const pendingMultiInputs = new Map()
 async function fetchHistoryRows(remoteJid, limit) {
     if (!db) return []
     return db.getLastMessages(INSTANCE_ID, remoteJid, limit)
+}
+
+async function handleGroupMessage(msg) {
+    if (!db || !msg?.message) return
+    const groupJid = msg.key?.remoteJid
+    if (!isGroupJid(groupJid)) return
+
+    const groupConfig = await db.getMonitoredGroup(INSTANCE_ID, groupJid)
+    if (!groupConfig) return
+
+    const participantJid = msg.key?.participant
+        || msg.participant
+        || msg.message?.extendedTextMessage?.contextInfo?.participant
+        || null
+    const content = extractInboundMessageText(msg.message) || "Mensagem recebida"
+    const meta = {
+        messageId: msg.key?.id,
+        pushName: msg.pushName || null,
+        hasMedia: Boolean(detectMediaPayload(msg.message))
+    }
+    await db.saveGroupMessage(INSTANCE_ID, groupJid, participantJid, "inbound", content, JSON.stringify(meta))
+
+    const mentionedJids = getMentionedJids(msg.message)
+    const selfJid = getSelfJid()
+    const normalizedSelf = selfJid ? selfJid.split(":")[0] : ""
+    const wasMentioned = normalizedSelf && mentionedJids.some(jid => (jid || "").split(":")[0] === normalizedSelf)
+    if (!wasMentioned) {
+        return
+    }
+
+    const replyConfig = await db.getGroupAutoReplies(INSTANCE_ID, groupJid)
+    if (!replyConfig?.enabled) {
+        return
+    }
+    let replyPool = []
+    try {
+        replyPool = JSON.parse(replyConfig.replies_json || "[]")
+    } catch {
+        replyPool = []
+    }
+    const sanitizedPool = Array.isArray(replyPool)
+        ? replyPool.map(entry => String(entry || "").trim()).filter(Boolean)
+        : []
+    if (!sanitizedPool.length) {
+        return
+    }
+    const chosen = sanitizedPool[Math.floor(Math.random() * sanitizedPool.length)]
+    if (!sock || !whatsappConnected) {
+        return
+    }
+    try {
+        await sendWhatsAppMessage(groupJid, { text: chosen })
+        await db.saveGroupMessage(
+            INSTANCE_ID,
+            groupJid,
+            normalizedSelf || null,
+            "outbound",
+            chosen,
+            JSON.stringify({ auto_reply: true })
+        )
+    } catch (err) {
+        log("Erro ao responder grupo automaticamente:", err.message)
+    }
 }
 
 async function generateOpenAIResponse(aiConfig, remoteJid, messageBody) {
@@ -2065,13 +3256,20 @@ async function sendSecretaryReply(remoteJid, message, reason = "secretary") {
     if (!sock) {
         throw new Error("WhatsApp não conectado")
     }
-    await sendWhatsAppMessage(remoteJid, { text: trimmed })
-    if (db) {
-        try {
-            const metadata = JSON.stringify({ source: "secretary", reason })
-            await db.saveMessage(INSTANCE_ID, remoteJid, "assistant", trimmed, "outbound", metadata)
-        } catch (err) {
-            log("Error saving secretary reply:", err.message)
+    const segments = splitHashSegments(trimmed)
+    if (!segments.length) {
+        segments.push(trimmed)
+    }
+    const metadata = JSON.stringify({ source: "secretary", reason })
+
+    for (const segment of segments) {
+        await sendWhatsAppMessage(remoteJid, { text: segment })
+        if (db) {
+            try {
+                await db.saveMessage(INSTANCE_ID, remoteJid, "assistant", segment, "outbound", metadata)
+            } catch (err) {
+                log("Error saving secretary reply:", err.message)
+            }
         }
     }
 }
@@ -2089,6 +3287,11 @@ async function processOwnerQuickReply(msg) {
     const messageBody = msg.message.conversation || msg.message.extendedTextMessage?.text || ""
     const trimmed = (messageBody || "").trim()
     if (!trimmed) return
+    const dedupeKey = `${remoteJid}|${trimmed}`
+    const recentTs = recentOutgoingText.get(dedupeKey)
+    if (recentTs && Date.now() - recentTs < RECENT_OUTGOING_TTL_MS) {
+        return
+    }
 
     if (db) {
         try {
@@ -2364,10 +3567,7 @@ async function dispatchAIResponse(remoteJid, messageBody, providedConfig = null,
     }
 
     const sanitizedOutputText = sanitizeMediaSeparators(stripBeforeSeparator(outputText || finalBaseText))
-    const segments = sanitizedOutputText
-        .split("#")
-        .map(part => part.trim())
-        .filter(Boolean)
+    const segments = splitHashSegments(sanitizedOutputText)
 
     const statusNameForContact = await resolveContactStatusName(remoteJid)
     const preparedSegments = segments.map(segment => replaceStatusPlaceholder(segment, statusNameForContact))
@@ -3601,7 +4801,11 @@ async function fetchAssistantMessageFromThread(threadsApi, threadId, afterMessag
 async function processMessageWithAI(msg) {
         if (!msg.key?.fromMe && msg.message) {
             const remoteJid = msg.key.remoteJid
-            if (!remoteJid || remoteJid.includes('@g.us')) return // Skip groups
+            if (!remoteJid) return
+            if (isGroupJid(remoteJid)) {
+                await handleGroupMessage(msg)
+                return
+            }
             const remoteJidLower = remoteJid.toLowerCase()
             const isStatusBroadcast = remoteJidLower.startsWith('status@broadcast')
             if (isStatusBroadcast) {
@@ -4285,6 +5489,28 @@ app.get("/api/messages/:instanceId/:remoteJid", async (req, res) => {
     }
 })
 
+// GET /api/message-counts/:instance_id/:remote_jid - Get inbound and outbound message counts
+app.get("/api/message-counts/:instanceId/:remoteJid", async (req, res) => {
+    try {
+        const { instanceId, remoteJid } = req.params;
+        if (!db) {
+            return res.status(503).json({ error: "Database not available" });
+        }
+        const inboundCount = await db.getInboundMessageCount(instanceId, remoteJid);
+        const outboundCount = await db.getOutboundMessageCount(instanceId, remoteJid);
+        res.json({
+            ok: true,
+            instanceId,
+            remoteJid,
+            inboundCount,
+            outboundCount
+        });
+    } catch (err) {
+        log("Error getting message counts:", err.message);
+        res.status(500).json({ error: "Failed to get message counts", detail: err.message });
+    }
+});
+
 // GET /api/scheduled/:instance_id/:remote_jid - Get scheduled messages
 app.get("/api/scheduled/:instanceId/:remoteJid", async (req, res) => {
     try {
@@ -4343,6 +5569,280 @@ app.delete("/api/scheduled/:instanceId/:scheduledId", async (req, res) => {
     } catch (err) {
         log("Error deleting scheduled message:", err.message)
         res.status(500).json({ ok: false, error: "Failed to delete scheduled message", detail: err.message })
+    }
+})
+
+// GET /api/groups/:instanceId - list groups + monitored groups
+app.get("/api/groups/:instanceId", async (req, res) => {
+    try {
+        const { instanceId } = req.params
+        if (instanceId !== INSTANCE_ID) {
+            return res.status(404).json({ ok: false, error: "Instância não encontrada" })
+        }
+        if (!sock || typeof sock.groupFetchAllParticipating !== "function") {
+            return res.status(503).json({ ok: false, error: "WhatsApp não conectado" })
+        }
+        const groupsMap = await sock.groupFetchAllParticipating()
+        const groups = Object.values(groupsMap || {}).map(group => ({
+            jid: group.id,
+            name: group.subject || group.name || "",
+            size: group.size || 0
+        }))
+        const monitored = db ? await db.getMonitoredGroups(instanceId) : []
+        res.json({ ok: true, instanceId, groups, monitored })
+    } catch (err) {
+        log("Error listing groups:", err.message)
+        res.status(500).json({ ok: false, error: "Falha ao listar grupos" })
+    }
+})
+
+// POST /api/groups/:instanceId/monitor - update monitored groups
+app.post("/api/groups/:instanceId/monitor", async (req, res) => {
+    try {
+        const { instanceId } = req.params
+        const groups = req.body?.groups || []
+        if (!db) {
+            return res.status(503).json({ ok: false, error: "Database not available" })
+        }
+        const result = await db.setMonitoredGroups(instanceId, groups)
+        res.json({ ok: true, instanceId, updated: result.updated })
+    } catch (err) {
+        log("Error updating monitored groups:", err.message)
+        res.status(500).json({ ok: false, error: "Falha ao salvar grupos monitorados" })
+    }
+})
+
+// POST /api/groups/:instanceId/send-bulk - send message to selected groups
+app.post("/api/groups/:instanceId/send-bulk", async (req, res) => {
+    try {
+        const { instanceId } = req.params
+        const { groups, message } = req.body || {}
+        if (instanceId !== INSTANCE_ID) {
+            return res.status(404).json({ ok: false, error: "Instância não encontrada" })
+        }
+        if (!sock) {
+            return res.status(503).json({ ok: false, error: "WhatsApp não conectado" })
+        }
+        if (!Array.isArray(groups) || groups.length === 0) {
+            return res.status(400).json({ ok: false, error: "Lista de grupos é obrigatória" })
+        }
+        if (!message || typeof message !== "string" || !message.trim()) {
+            return res.status(400).json({ ok: false, error: "Mensagem é obrigatória" })
+        }
+
+        const trimmed = message.trim()
+        const results = []
+        const failures = []
+
+        for (const groupJid of groups) {
+            if (!groupJid || typeof groupJid !== "string") {
+                continue
+            }
+            try {
+                const result = await sendWhatsAppMessage(groupJid, { text: trimmed })
+                results.push({ group_jid: groupJid, ok: true })
+                if (db) {
+                    await db.saveGroupMessage(
+                        INSTANCE_ID,
+                        groupJid,
+                        getSelfJid(),
+                        "outbound",
+                        trimmed,
+                        JSON.stringify({ bulk: true })
+                    )
+                }
+                if (result) {
+                    results[results.length - 1].result = result
+                }
+            } catch (err) {
+                failures.push({ group_jid: groupJid, error: err.message || "Falha ao enviar" })
+            }
+        }
+
+        res.json({
+            ok: failures.length === 0,
+            instanceId,
+            sent: results.length,
+            failed: failures
+        })
+    } catch (err) {
+        log("Error sending bulk group message:", err.message)
+        res.status(500).json({ ok: false, error: "Falha ao enviar mensagens para grupos" })
+    }
+})
+
+// POST /api/groups/:instanceId/contacts - fetch group contacts
+app.post("/api/groups/:instanceId/contacts", async (req, res) => {
+    try {
+        const { instanceId } = req.params
+        const { groups } = req.body || {}
+        if (instanceId !== INSTANCE_ID) {
+            return res.status(404).json({ ok: false, error: "Instância não encontrada" })
+        }
+        if (!sock) {
+            return res.status(503).json({ ok: false, error: "WhatsApp não conectado" })
+        }
+        if (!Array.isArray(groups) || groups.length === 0) {
+            return res.status(400).json({ ok: false, error: "Lista de grupos é obrigatória" })
+        }
+
+        const contacts = []
+        const contactMetaCache = new Map()
+        const contactStore = sock?.contacts || null
+        const contactsByLid = new Map()
+        if (contactStore && typeof contactStore === "object") {
+            Object.values(contactStore).forEach(contact => {
+                if (contact?.lid && typeof contact.lid === "string") {
+                    contactsByLid.set(contact.lid, contact)
+                }
+            })
+        }
+
+        const getContactMetaName = async (jid) => {
+            if (!db || !jid) return ""
+            if (contactMetaCache.has(jid)) {
+                return contactMetaCache.get(jid) || ""
+            }
+            try {
+                const meta = await db.getContactMetadata(instanceId, jid)
+                const name = normalizeMetaField(meta?.contact_name) || ""
+                contactMetaCache.set(jid, name)
+                return name
+            } catch (err) {
+                contactMetaCache.set(jid, "")
+                return ""
+            }
+        }
+
+        for (const groupJid of groups) {
+            if (!groupJid || typeof groupJid !== "string") {
+                continue
+            }
+            const meta = await getGroupMetadata(groupJid)
+            const groupName = meta?.subject || meta?.name || groupJid
+            const participants = Array.isArray(meta?.participants) ? meta.participants : []
+            for (const participant of participants) {
+                const candidateJids = [participant?.jid, participant?.id, participant?.participant].filter(Boolean)
+                const preferredJid = candidateJids.find(item => item.includes("@s.whatsapp.net")) || candidateJids[0] || ""
+                let jid = preferredJid
+                let name = normalizeMetaField(participant?.notify || participant?.name || participant?.vname) || ""
+                let contactRef = null
+                if (contactStore && jid && contactStore[jid]) {
+                    contactRef = contactStore[jid]
+                } else if (jid && contactsByLid.has(jid)) {
+                    contactRef = contactsByLid.get(jid)
+                }
+                if (contactRef) {
+                    const contactJid = contactRef.id || contactRef.jid || ""
+                    if (contactJid && contactJid !== jid) {
+                        jid = contactJid
+                    }
+                    name = name || normalizeMetaField(contactRef.notify || contactRef.name || contactRef.vname) || ""
+                }
+                if (!name && jid) {
+                    name = await getContactMetaName(jid)
+                }
+                const domain = jid.includes("@") ? jid.split("@")[1] : ""
+                const phone = domain === "s.whatsapp.net" ? jid.split("@")[0].replace(/\D/g, "") : ""
+                contacts.push({
+                    group_jid: groupJid,
+                    group_name: groupName,
+                    jid,
+                    name: name || jid,
+                    phone
+                })
+            }
+        }
+
+        res.json({ ok: true, instanceId, contacts })
+    } catch (err) {
+        log("Error fetching group contacts:", err.message)
+        res.status(500).json({ ok: false, error: "Falha ao buscar contatos" })
+    }
+})
+
+// POST /api/groups/:instanceId/leave - leave group and remove monitoring
+app.post("/api/groups/:instanceId/leave", async (req, res) => {
+    try {
+        const { instanceId } = req.params
+        const { group_jid: groupJid } = req.body || {}
+        if (!groupJid) {
+            return res.status(400).json({ ok: false, error: "group_jid é obrigatório" })
+        }
+        if (instanceId !== INSTANCE_ID) {
+            return res.status(404).json({ ok: false, error: "Instância não encontrada" })
+        }
+        if (!sock || typeof sock.groupLeave !== "function") {
+            return res.status(503).json({ ok: false, error: "WhatsApp não conectado" })
+        }
+        await sock.groupLeave(groupJid)
+        if (db && typeof db.deleteMonitoredGroup === "function") {
+            await db.deleteMonitoredGroup(instanceId, groupJid)
+        }
+        res.json({ ok: true, instanceId, group_jid: groupJid })
+    } catch (err) {
+        log("Error leaving group:", err.message)
+        res.status(500).json({ ok: false, error: "Falha ao sair do grupo" })
+    }
+})
+
+// GET/POST /api/groups/:instanceId/auto-replies
+app.get("/api/groups/:instanceId/auto-replies", async (req, res) => {
+    try {
+        const { instanceId } = req.params
+        const groupJid = req.query.group_jid
+        if (!groupJid) {
+            return res.status(400).json({ ok: false, error: "group_jid é obrigatório" })
+        }
+        if (!db) {
+            return res.status(503).json({ ok: false, error: "Database not available" })
+        }
+        const data = await db.getGroupAutoReplies(instanceId, groupJid)
+        res.json({ ok: true, instanceId, group_jid: groupJid, data })
+    } catch (err) {
+        log("Error fetching group auto replies:", err.message)
+        res.status(500).json({ ok: false, error: "Falha ao buscar respostas automáticas" })
+    }
+})
+
+app.post("/api/groups/:instanceId/auto-replies", async (req, res) => {
+    try {
+        const { instanceId } = req.params
+        const { group_jid: groupJid, replies, enabled } = req.body || {}
+        if (!groupJid) {
+            return res.status(400).json({ ok: false, error: "group_jid é obrigatório" })
+        }
+        if (!db) {
+            return res.status(503).json({ ok: false, error: "Database not available" })
+        }
+        const result = await db.setGroupAutoReplies(instanceId, groupJid, replies || [], enabled !== false)
+        res.json({ ok: true, instanceId, group_jid: groupJid, updated: result.updated })
+    } catch (err) {
+        log("Error saving group auto replies:", err.message)
+        res.status(500).json({ ok: false, error: "Falha ao salvar respostas automáticas" })
+    }
+})
+
+// POST /api/groups/:instanceId/schedules
+app.post("/api/groups/:instanceId/schedules", async (req, res) => {
+    try {
+        const { instanceId } = req.params
+        const { group_jid: groupJid, message, scheduled_at: scheduledAt } = req.body || {}
+        if (!groupJid || !message || !scheduledAt) {
+            return res.status(400).json({ ok: false, error: "group_jid, message e scheduled_at são obrigatórios" })
+        }
+        const date = new Date(scheduledAt)
+        if (Number.isNaN(date.getTime())) {
+            return res.status(400).json({ ok: false, error: "scheduled_at inválido" })
+        }
+        if (!db) {
+            return res.status(503).json({ ok: false, error: "Database not available" })
+        }
+        const result = await db.enqueueGroupScheduledMessage(instanceId, groupJid, message, date)
+        res.json({ ok: true, instanceId, group_jid: groupJid, scheduledId: result.scheduledId, scheduledAt: result.scheduledAt })
+    } catch (err) {
+        log("Error scheduling group message:", err.message)
+        res.status(500).json({ ok: false, error: "Falha ao agendar mensagem de grupo" })
     }
 })
 
@@ -4467,6 +5967,293 @@ app.get("/api/instances/:instanceId", async (req, res) => {
     } catch (err) {
         log("Error fetching instance:", err.message)
         res.status(500).json({ ok: false, error: "Failed to fetch instance", detail: err.message })
+    }
+})
+
+// ===== GOOGLE CALENDAR API =====
+
+app.get("/api/calendar/auth-url", async (req, res) => {
+    try {
+        if (!db) {
+            return res.status(503).json({ ok: false, error: "Database not available" })
+        }
+        if (!CALENDAR_TOKEN_SECRET) {
+            return res.status(400).json({ ok: false, error: "CALENDAR_TOKEN_SECRET não configurada" })
+        }
+        const instanceId = typeof req.query.instance === "string" && req.query.instance.trim()
+            ? req.query.instance.trim()
+            : INSTANCE_ID
+        cleanupExpiredCalendarStates()
+        const state = toBase64Url(nodeCrypto.randomBytes(24))
+        calendarOauthStates.set(state, { instanceId, createdAt: Date.now() })
+        await persistPendingCalendarAuth(instanceId, state)
+        const oauth2Client = buildGoogleOAuthClient()
+        const url = oauth2Client.generateAuthUrl({
+            access_type: "offline",
+            scope: GOOGLE_CALENDAR_SCOPES,
+            prompt: "consent",
+            state
+        })
+        res.json({ ok: true, instanceId, url, state })
+    } catch (err) {
+        log("calendar auth-url error:", err.message)
+        res.status(500).json({ ok: false, error: "Falha ao gerar URL OAuth", detail: err.message })
+    }
+})
+
+app.get("/api/calendar/oauth2/callback", async (req, res) => {
+    let callbackInstanceId = null
+    let callbackState = null
+    try {
+        if (!db) {
+            return res.status(503).json({ ok: false, error: "Database not available" })
+        }
+        if (!CALENDAR_TOKEN_SECRET) {
+            return res.status(400).json({ ok: false, error: "CALENDAR_TOKEN_SECRET não configurada" })
+        }
+        const { code, state, error } = req.query || {}
+        callbackState = state ? String(state) : null
+        if (error) {
+            return res.status(400).json({ ok: false, error: String(error) })
+        }
+        if (!code || !state) {
+            return res.status(400).json({ ok: false, error: "Parâmetros code/state obrigatórios" })
+        }
+        cleanupExpiredCalendarStates()
+        const meta = calendarOauthStates.get(String(state))
+        if (!meta) {
+            return res.status(400).json({ ok: false, error: "state inválido ou expirado" })
+        }
+        calendarOauthStates.delete(String(state))
+        callbackInstanceId = meta.instanceId || INSTANCE_ID
+        const instanceId = meta.instanceId || INSTANCE_ID
+        const oauth2Client = buildGoogleOAuthClient()
+        const { tokens } = await oauth2Client.getToken(String(code))
+        if (!tokens || !tokens.refresh_token) {
+            return res.status(400).json({ ok: false, error: "refresh_token ausente. Revogue acesso e reconecte com consentimento." })
+        }
+        oauth2Client.setCredentials(tokens)
+        let calendarEmail = null
+        try {
+            const oauth2 = googleApis.google.oauth2({ version: "v2", auth: oauth2Client })
+            const userInfo = await oauth2.userinfo.get()
+            calendarEmail = userInfo?.data?.email || null
+        } catch (err) {
+            log("calendar userinfo error:", err.message)
+        }
+        await db.upsertCalendarAccount(instanceId, {
+            calendar_email: calendarEmail,
+            access_token: encryptCalendarToken(tokens.access_token),
+            refresh_token: encryptCalendarToken(tokens.refresh_token),
+            token_expiry: tokens.expiry_date || null,
+            scope: tokens.scope || null
+        })
+        const payload = { ok: true, instanceId, calendar_email: calendarEmail }
+        if ((req.headers.accept || "").includes("text/html")) {
+            res.type("html").send(`
+                <!doctype html>
+                <html lang="pt-BR">
+                <head>
+                    <meta charset="utf-8">
+                    <title>Google Calendar conectado</title>
+                    <style>
+                        body { font-family: system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#0f172a; color:#f1f5f9; display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; }
+                        .card { text-align:center; background:#111827; padding:2rem; border-radius:1rem; box-shadow:0 20px 45px rgba(15,23,42,.45); max-width:360px; }
+                        h1 { margin-bottom:0.5rem; font-size:1.5rem; }
+                        p { color:#cbd5f5; margin-bottom:1rem; }
+                        button { border:none; padding:0.65rem 1.25rem; border-radius:999px; font-size:0.95rem; font-weight:600; background:#34d399; color:#111827; cursor:pointer; }
+                        button:hover { background:#2bb77c; }
+                    </style>
+                </head>
+                <body>
+                    <div class="card">
+                        <h1>Parabéns!</h1>
+                        <p>Seu Google Calendar está conectado com sucesso.</p>
+                        <p>Você pode fechar esta janela e continuar o atendimento.</p>
+                        <button onclick="window.close();">Fechar</button>
+                    </div>
+                </body>
+                </html>
+            `)
+            return
+        }
+        res.json(payload)
+    } catch (err) {
+        log("calendar oauth2 callback error:", err.message)
+        res.status(500).json({ ok: false, error: "Falha ao concluir OAuth", detail: err.message })
+    } finally {
+        if (callbackInstanceId) {
+            await clearPendingCalendarAuth(callbackInstanceId, callbackState)
+        }
+    }
+})
+
+app.post("/api/calendar/disconnect", async (req, res) => {
+    try {
+        if (!db) {
+            return res.status(503).json({ ok: false, error: "Database not available" })
+        }
+        const instanceId = typeof req.query.instance === "string" && req.query.instance.trim()
+            ? req.query.instance.trim()
+            : INSTANCE_ID
+        await db.clearCalendarAccount(instanceId)
+        res.json({ ok: true, instanceId })
+    } catch (err) {
+        log("calendar disconnect error:", err.message)
+        res.status(500).json({ ok: false, error: "Falha ao desconectar calendar", detail: err.message })
+    }
+})
+
+app.post("/api/calendar/force-clear", async (req, res) => {
+    try {
+        if (!db) {
+            return res.status(503).json({ ok: false, error: "Database not available" })
+        }
+        const instanceId = typeof req.query.instance === "string" && req.query.instance.trim()
+            ? req.query.instance.trim()
+            : INSTANCE_ID
+        const pending = await loadPendingCalendarAuth(instanceId)
+        if (pending?.state) {
+            calendarOauthStates.delete(pending.state)
+        }
+        await clearPendingCalendarAuth(instanceId)
+        res.json({ ok: true, instanceId, force_cleared: true })
+    } catch (err) {
+        log("calendar force-clear error:", err.message)
+        res.status(500).json({ ok: false, error: "Falha ao liberar bloqueio", detail: err.message })
+    }
+})
+
+app.get("/api/calendar/config", async (req, res) => {
+    try {
+        if (!db) {
+            return res.status(503).json({ ok: false, error: "Database not available" })
+        }
+        const instanceId = typeof req.query.instance === "string" && req.query.instance.trim()
+            ? req.query.instance.trim()
+            : INSTANCE_ID
+        cleanupExpiredCalendarStates()
+        const account = await db.getCalendarAccount(instanceId)
+        let pendingAuth = await loadPendingCalendarAuth(instanceId)
+        if (pendingAuth?.state && !calendarOauthStates.has(pendingAuth.state)) {
+            pendingAuth = null
+            await clearPendingCalendarAuth(instanceId)
+        }
+        const calendars = await db.listCalendarConfigs(instanceId)
+        const normalized = calendars.map(item => ({
+            ...item,
+            availability: parseAvailabilityJson(item.availability_json)
+        }))
+        res.json({
+            ok: true,
+            instanceId,
+            connected: Boolean(account && account.refresh_token),
+            account: account ? { calendar_email: account.calendar_email } : null,
+            calendars: normalized,
+            pending_auth: pendingAuth ? {
+                state: pendingAuth.state,
+                createdAt: pendingAuth.createdAt
+            } : null
+        })
+    } catch (err) {
+        log("calendar config error:", err.message)
+        res.status(500).json({ ok: false, error: "Falha ao ler configuração", detail: err.message })
+    }
+})
+
+app.get("/api/calendar/google-calendars", async (req, res) => {
+    try {
+        const instanceId = typeof req.query.instance === "string" && req.query.instance.trim()
+            ? req.query.instance.trim()
+            : INSTANCE_ID
+        await ensureCalendarConnection(instanceId)
+        const { calendar } = await getCalendarService(instanceId)
+        const response = await calendar.calendarList.list()
+        const items = Array.isArray(response.data.items) ? response.data.items : []
+        const calendars = items.map(item => ({
+            id: item.id,
+            summary: item.summary || "",
+            timezone: item.timeZone || null,
+            accessRole: item.accessRole || null,
+            primary: Boolean(item.primary)
+        }))
+        res.json({ ok: true, instanceId, calendars })
+    } catch (err) {
+        log("calendar list error:", err.message)
+        res.status(500).json({ ok: false, error: "Falha ao listar calendários", detail: err.message })
+    }
+})
+
+app.post("/api/calendar/calendars", async (req, res) => {
+    try {
+        if (!db) {
+            return res.status(503).json({ ok: false, error: "Database not available" })
+        }
+        const instanceId = typeof req.query.instance === "string" && req.query.instance.trim()
+            ? req.query.instance.trim()
+            : INSTANCE_ID
+        const payload = req.body || {}
+        const calendarId = (payload.calendar_id || "").trim()
+        if (!calendarId) {
+            return res.status(400).json({ ok: false, error: "calendar_id é obrigatório" })
+        }
+        const existing = await db.getCalendarConfig(instanceId, calendarId)
+        const availability = payload.availability || payload.availability_json || null
+        const availabilityJson = availability ? JSON.stringify(availability) : existing?.availability_json || null
+        const isDefault = payload.is_default === undefined ? (existing?.is_default ? 1 : 0) : (payload.is_default ? 1 : 0)
+        await db.upsertCalendarConfig(instanceId, calendarId, {
+            summary: payload.summary || existing?.summary || null,
+            timezone: payload.timezone || existing?.timezone || null,
+            availability_json: availabilityJson,
+            is_default: isDefault
+        })
+        if (isDefault) {
+            await db.setDefaultCalendarConfig(instanceId, calendarId)
+        }
+        res.json({ ok: true, instanceId, calendar_id: calendarId })
+    } catch (err) {
+        log("calendar save error:", err.message)
+        res.status(500).json({ ok: false, error: "Falha ao salvar calendário", detail: err.message })
+    }
+})
+
+app.delete("/api/calendar/calendars", async (req, res) => {
+    try {
+        if (!db) {
+            return res.status(503).json({ ok: false, error: "Database not available" })
+        }
+        const instanceId = typeof req.query.instance === "string" && req.query.instance.trim()
+            ? req.query.instance.trim()
+            : INSTANCE_ID
+        const calendarId = typeof req.query.calendar_id === "string" ? req.query.calendar_id.trim() : ""
+        if (!calendarId) {
+            return res.status(400).json({ ok: false, error: "calendar_id é obrigatório" })
+        }
+        await db.deleteCalendarConfig(instanceId, calendarId)
+        res.json({ ok: true, instanceId, calendar_id: calendarId })
+    } catch (err) {
+        log("calendar delete error:", err.message)
+        res.status(500).json({ ok: false, error: "Falha ao remover calendário", detail: err.message })
+    }
+})
+
+app.post("/api/calendar/default", async (req, res) => {
+    try {
+        if (!db) {
+            return res.status(503).json({ ok: false, error: "Database not available" })
+        }
+        const instanceId = typeof req.query.instance === "string" && req.query.instance.trim()
+            ? req.query.instance.trim()
+            : INSTANCE_ID
+        const calendarId = (req.body?.calendar_id || "").trim()
+        if (!calendarId) {
+            return res.status(400).json({ ok: false, error: "calendar_id é obrigatório" })
+        }
+        await db.setDefaultCalendarConfig(instanceId, calendarId)
+        res.json({ ok: true, instanceId, calendar_id: calendarId })
+    } catch (err) {
+        log("calendar default error:", err.message)
+        res.status(500).json({ ok: false, error: "Falha ao definir calendário padrão", detail: err.message })
     }
 })
 
@@ -4667,3 +6454,4 @@ process.on("unhandledRejection", err => {
 process.on("uncaughtException", err => {
     log("Uncaught Exception:", err)
 })
+
