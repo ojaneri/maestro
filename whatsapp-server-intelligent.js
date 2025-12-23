@@ -619,6 +619,7 @@ function getNextNightActionTime() {
 }
 
 let nextScheduledAction = null;
+let automationPausedUntil = 0;
 
 function scheduleNightAction() {
     const targetTime = getNextNightActionTime();
@@ -1168,7 +1169,9 @@ const AI_SETTING_KEYS = [
     "ai_max_tokens",
     "gemini_api_key",
     "gemini_instruction",
-    "ai_multi_input_delay"
+    "ai_multi_input_delay",
+    "auto_pause_enabled",
+    "auto_pause_minutes"
 ]
 const AUDIO_TRANSCRIPTION_SETTING_KEYS = [
     "audio_transcription_enabled",
@@ -3504,6 +3507,11 @@ async function dispatchAIResponse(remoteJid, messageBody, providedConfig = null,
         throw new Error("Mensagem vazia para IA")
     }
 
+    if (Date.now() < automationPausedUntil) {
+        log("Automation paused, skipping AI response for", remoteJid)
+        return { text: "", provider: "paused" }
+    }
+
     log("flow.ai.request", {
         remoteJid,
         provider: providedConfig?.provider || DEFAULT_PROVIDER,
@@ -4370,7 +4378,9 @@ async function loadAIConfig() {
         openai_api_key: settings.openai_api_key || "",
         openai_mode: settings.openai_mode || "responses",
         gemini_api_key: settings.gemini_api_key || "",
-        gemini_instruction: settings.gemini_instruction || ""
+        gemini_instruction: settings.gemini_instruction || "",
+        auto_pause_enabled: settings.auto_pause_enabled === "true",
+        auto_pause_minutes: Math.max(1, toNumber(settings.auto_pause_minutes, 5))
     }
 }
 
@@ -4906,6 +4916,14 @@ async function processMessageWithAI(msg) {
                     }
                 }
                 return
+            }
+
+            // Check if message is from owner (direct WhatsApp)
+            const isFromOwner = remoteJid === `${instanceConfig.phone}@s.whatsapp.net` && !msg.key?.fromMe
+            if (isFromOwner && aiConfig.auto_pause_enabled) {
+                const pauseMinutes = aiConfig.auto_pause_minutes || 5
+                automationPausedUntil = Date.now() + pauseMinutes * 60 * 1000
+                log("Auto pause activated by owner message for", pauseMinutes, "minutes")
             }
 
             const aiEnabled = aiConfig.enabled
