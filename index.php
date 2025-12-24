@@ -2337,6 +2337,8 @@ perf_log('index.php render', [
     $aiOpenaiApiKey = $aiConfig['openai_api_key'] ?? $legacyOpenAIConfig['api_key'] ?? '';
     $aiGeminiApiKey = $aiConfig['gemini_api_key'] ?? '';
     $aiGeminiInstruction = $aiConfig['gemini_instruction'] ?? DEFAULT_GEMINI_INSTRUCTION;
+    $aiAutoPauseEnabled = $aiConfig['auto_pause_enabled'] ?? false;
+    $aiAutoPauseMinutes = $aiConfig['auto_pause_minutes'] ?? 5;
     $alarmConfig = $selectedInstance['alarms'] ?? [];
     $audioTranscriptionConfig = $selectedInstance['audio_transcription'] ?? [];
     $audioTranscriptionEnabled = !empty($audioTranscriptionConfig['enabled']);
@@ -2806,6 +2808,42 @@ Como usar:
             </div>
           </div>
         </div>
+      </section>
+
+      <section id="autoPauseSection" class="xl:col-span-2 bg-white border border-mid rounded-2xl p-6 card-soft">
+        <div class="font-medium mb-1">Auto Pause</div>
+        <p class="text-sm text-slate-500 mb-4">
+          Pausa automaticamente a automação quando o dono enviar uma mensagem diretamente do WhatsApp.
+        </p>
+
+        <form id="autoPauseForm" class="space-y-4" onsubmit="return false;">
+          <div class="flex items-center gap-2">
+            <input type="checkbox" id="autoPauseEnabled" class="h-4 w-4 rounded" <?= $aiAutoPauseEnabled ? 'checked' : '' ?>>
+            <label for="autoPauseEnabled" class="text-sm text-slate-600">
+              Habilitar Auto Pause
+            </label>
+          </div>
+
+          <div>
+            <label class="text-xs text-slate-500">Minutos para pausar</label>
+            <input id="autoPauseMinutes" type="number" min="1" step="1"
+                   class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
+                   value="<?= htmlspecialchars($aiAutoPauseMinutes) ?>">
+            <p class="text-[11px] text-slate-500 mt-1">
+              Quando o dono enviar uma mensagem diretamente do WhatsApp, a automação será pausada por este tempo.
+            </p>
+          </div>
+
+          <div class="flex flex-wrap gap-2 items-center">
+            <button type="button" id="saveAutoPauseButton"
+                    class="px-4 py-2 rounded-xl bg-primary text-white font-medium hover:opacity-90">
+              Salvar
+            </button>
+            <p id="autoPauseStatus" aria-live="polite" class="text-sm text-slate-500 mt-2 sm:mt-0">
+              &nbsp;
+            </p>
+          </div>
+        </form>
       </section>
     </div>
     <div data-tab-pane="tab-automacao" class="tab-pane space-y-6">
@@ -3585,6 +3623,95 @@ document.getElementById('qrResetCancelBtn')?.addEventListener('click', (event) =
 </script>
 <script>
 (function () {
+  const form = document.getElementById('autoPauseForm');
+  const saveBtn = document.getElementById('saveAutoPauseButton');
+  const statusEl = document.getElementById('autoPauseStatus');
+  const instanceApiKey = <?= json_encode($selectedInstance['api_key'] ?? '') ?>;
+  const aiInstanceId = <?= json_encode($selectedInstanceId ?? '') ?>;
+  const logTag = `[auto-pause ${aiInstanceId || 'unknown'}]`;
+
+  if (!form || !saveBtn || !statusEl) {
+    console.warn(logTag, 'formulário do auto pause incompleto');
+    return;
+  }
+
+  const updateStatus = (message, mode = 'info') => {
+    const baseClass = 'text-sm transition-colors';
+    const typeClass = mode === 'error' ? 'text-error font-medium'
+      : mode === 'warning' ? 'text-alert font-medium'
+      : mode === 'success' ? 'text-success font-medium'
+      : 'text-slate-500';
+    statusEl.className = `${baseClass} ${typeClass}`;
+    statusEl.textContent = message;
+  };
+
+  if (!instanceApiKey) {
+    console.error(logTag, 'chave da instância não disponível para chamada');
+    updateStatus('Chave da instância não disponível para salvar', 'error');
+    saveBtn.disabled = true;
+    return;
+  }
+
+  saveBtn.addEventListener('click', async () => {
+    const payload = {
+      auto_pause_enabled: document.getElementById('autoPauseEnabled').checked,
+      auto_pause_minutes: Number(document.getElementById('autoPauseMinutes').value) || 5
+    };
+    console.groupCollapsed(logTag, 'salvar configurações auto pause');
+    console.log(logTag, 'payload', payload);
+    updateStatus('Salvando configurações...', 'info');
+    saveBtn.disabled = true;
+
+    try {
+      const saveEndpointUrl = new URL(window.location.href);
+      saveEndpointUrl.searchParams.set('ajax_save_ai', '1');
+      saveEndpointUrl.searchParams.set('instance', aiInstanceId);
+      const saveEndpoint = saveEndpointUrl.toString();
+      const formPayload = new URLSearchParams({
+        csrf_token: document.querySelector('input[name="csrf_token"]')?.value || ''
+      });
+      formPayload.set('auto_pause_enabled', payload.auto_pause_enabled ? '1' : '0');
+      formPayload.set('auto_pause_minutes', String(payload.auto_pause_minutes));
+
+      const response = await fetch(saveEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: formPayload.toString()
+      });
+
+      const resultText = await response.text();
+      console.log(logTag, 'resposta HTTP', response.status, response.statusText);
+      console.log(logTag, 'corpo da resposta', resultText);
+      let result = null;
+      try {
+        result = JSON.parse(resultText);
+        console.log(logTag, 'payload JSON', result);
+      } catch (parseError) {
+        console.debug(logTag, 'não foi possível interpretar JSON', parseError);
+      }
+
+      if (!response.ok || !result?.success) {
+        const rawMessage = (resultText || '').trim();
+        const rawFallback = rawMessage && !rawMessage.startsWith('{') ? rawMessage.slice(0, 240) : '';
+        const errorMessage = result?.error || rawFallback || response.statusText || 'Erro ao salvar';
+        throw new Error(errorMessage);
+      }
+
+      updateStatus('Configurações salvas com sucesso', 'success');
+    } catch (error) {
+      console.error(logTag, 'falha ao salvar auto pause', error);
+      updateStatus(`Erro ao salvar: ${error.message}`, 'error');
+    } finally {
+      saveBtn.disabled = false;
+      console.groupEnd();
+    }
+  });
+})();
+</script>
+<script>
+(function () {
   const mobileSidebar = document.getElementById('mobileSidebarContainer');
   const openBtn = document.getElementById('openSidebarBtn');
   const closeBtn = document.getElementById('closeMobileSidebar');
@@ -3964,7 +4091,9 @@ document.getElementById('qrResetCancelBtn')?.addEventListener('click', (event) =
       openai_api_key: getFieldValue('openaiApiKey'),
       openai_mode: modeSelect?.value || 'responses',
       gemini_api_key: getFieldValue('geminiApiKey'),
-      gemini_instruction: getFieldValue('geminiInstruction')
+      gemini_instruction: getFieldValue('geminiInstruction'),
+      auto_pause_enabled: document.getElementById('autoPauseEnabled').checked,
+      auto_pause_minutes: Number(getFieldValue('autoPauseMinutes', 5))
     };
   };
 
@@ -3997,6 +4126,8 @@ document.getElementById('qrResetCancelBtn')?.addEventListener('click', (event) =
       formPayload.set('openai_mode', payload.openai_mode || 'responses');
       formPayload.set('gemini_api_key', payload.gemini_api_key || '');
       formPayload.set('gemini_instruction', payload.gemini_instruction || '');
+      formPayload.set('auto_pause_enabled', payload.auto_pause_enabled ? '1' : '0');
+      formPayload.set('auto_pause_minutes', String(payload.auto_pause_minutes || 5));
 
       const response = await fetch(saveEndpoint, {
         method: 'POST',
