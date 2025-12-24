@@ -280,6 +280,11 @@ if (isset($_GET['ajax_message_counts'])) {
     proxyNodeRequest($instance, $path, 'GET');
 }
 
+if (isset($_GET['ajax_auto_pause_status'])) {
+    $path = "/api/auto-pause-status";
+    proxyNodeRequest($instance, $path, 'GET');
+}
+
 function openChatDbOrFail() {
     $dbPath = __DIR__ . '/chat_data.db';
     if (!file_exists($dbPath)) {
@@ -703,6 +708,7 @@ if (isset($_GET['ajax_send']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
             </button>
           </div>
           <div id="chatQueueStatus" class="text-xs text-orange-600 hidden">Aguardando X segundos...</div>
+          <div id="autoPauseStatus" class="text-xs text-orange-600 hidden"></div>
           <?php if ($instancePhoneLabel): ?>
             <div class="text-[11px] text-slate-500 mt-1">WhatsApp local: <?= htmlspecialchars($instancePhoneLabel) ?></div>
           <?php endif; ?>
@@ -1020,6 +1026,7 @@ let exportEnabled = false;
 
 const chatTaxar = document.getElementById('chatTaxar');
 const chatTemperature = document.getElementById('chatTemperature');
+const autoPauseStatus = document.getElementById('autoPauseStatus');
 
 function updateScheduleBadge(pendingCount = 0, sentCount = 0) {
     if (!scheduleBadge) {
@@ -1128,6 +1135,41 @@ async function refreshMultiInputStatus(remoteJid) {
         console.error(logPrefix, 'refreshMultiInputStatus error', error);
         updateQueueIndicator(null);
         return null;
+    }
+}
+
+async function refreshAutoPauseStatus() {
+    try {
+        const response = await fetchWithCreds(buildAjaxUrl({ ajax_auto_pause_status: '1' }));
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data?.ok) {
+            throw new Error(data?.error || 'Não foi possível verificar o status do auto pause');
+        }
+        updateAutoPauseIndicator(data);
+        return data;
+    } catch (error) {
+        console.error(logPrefix, 'refreshAutoPauseStatus error', error);
+        updateAutoPauseIndicator(null);
+        return null;
+    }
+}
+
+function updateAutoPauseIndicator(data) {
+    if (!autoPauseStatus) return;
+    if (!data || !data.enabled) {
+        autoPauseStatus.classList.add('hidden');
+        autoPauseStatus.textContent = '';
+        return;
+    }
+    if (data.paused && data.remaining_seconds > 0) {
+        const minutes = Math.floor(data.remaining_seconds / 60);
+        const seconds = data.remaining_seconds % 60;
+        const timeStr = minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+        autoPauseStatus.textContent = `Auto Pause ativo - ${timeStr} restantes`;
+        autoPauseStatus.classList.remove('hidden');
+    } else {
+        autoPauseStatus.classList.add('hidden');
+        autoPauseStatus.textContent = '';
     }
 }
 
@@ -2527,6 +2569,7 @@ systemStatusDot.addEventListener('mouseleave', () => {
 // Auto-refresh functionality
 setInterval(() => {
     checkSystemHealth();
+    refreshAutoPauseStatus();
     if (selectedContact && !isLoading) {
         loadMessages(selectedContact);
     }
@@ -2538,6 +2581,7 @@ setInterval(() => {
 function initializeConversationView() {
     loadContacts({ reset: true });
     checkSystemHealth();
+    refreshAutoPauseStatus();
 
     if ('<?= $connectionStatus ?>' !== 'connected') {
         chatStatus.textContent = 'Instância desconectada';

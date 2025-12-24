@@ -5976,6 +5976,38 @@ app.get("/api/health", async (req, res) => {
     }
 })
 
+app.get("/api/auto-pause-status", async (req, res) => {
+    try {
+        if (!db) {
+            return res.status(503).json({ ok: false, error: "Database not available" })
+        }
+
+        const enabled = await db.getSetting(INSTANCE_ID, 'auto_pause_enabled')
+        const minutes = await db.getSetting(INSTANCE_ID, 'auto_pause_minutes')
+        const pauseUntil = await db.getPersistentVariable(INSTANCE_ID, 'auto_pause_until')
+
+        const isEnabled = enabled === '1' || enabled === 'true'
+        const pauseMinutes = parseInt(minutes) || 5
+        const pauseUntilMs = pauseUntil ? parseInt(pauseUntil) : null
+        const now = Date.now()
+        const isPaused = pauseUntilMs && pauseUntilMs > now
+        const remainingMs = isPaused ? pauseUntilMs - now : 0
+        const remainingSeconds = Math.ceil(remainingMs / 1000)
+
+        res.json({
+            ok: true,
+            enabled: isEnabled,
+            minutes: pauseMinutes,
+            paused: isPaused,
+            remaining_seconds: remainingSeconds,
+            pause_until: pauseUntilMs ? new Date(pauseUntilMs).toISOString() : null
+        })
+    } catch (err) {
+        log("Error getting auto pause status:", err.message)
+        res.status(500).json({ ok: false, error: "Failed to get auto pause status", detail: err.message })
+    }
+})
+
 app.get("/api/instances", async (req, res) => {
     try {
         if (!db) {
