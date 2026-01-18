@@ -85,7 +85,7 @@ $dashboardBaseUrl = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
 if ($dashboardBaseUrl === '') {
     $dashboardBaseUrl = '/';
 }
-$dashboardLogoUrl = "{$dashboardBaseUrl}/assets/maestro-logo.png";
+$dashboardLogoUrl = buildPublicBaseUrl($dashboardBaseUrl . '/assets/maestro-logo.png');
 
 $instancePhoneLabel = formatInstancePhoneLabel($instance['phone'] ?? '');
 
@@ -199,6 +199,16 @@ function formatInstancePhoneLabel($jid) {
     }
     $label = $formatted ?: $local;
     return "{$label} @{$domain}";
+}
+
+if (!function_exists('buildPublicBaseUrl')) {
+    function buildPublicBaseUrl(string $basePath): string
+    {
+        $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+        $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+        $normalized = rtrim($basePath, '/');
+        return "{$scheme}://{$host}{$normalized}";
+    }
 }
 
 if (isset($_GET['ajax_chats'])) {
@@ -640,7 +650,7 @@ if (isset($_GET['ajax_send']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
         <?= htmlspecialchars($instance['name']) ?>
       </div>
 
-      <a href="/api/envio/wpp/?instance=<?= urlencode($instanceId) ?>" class="mt-4 w-full px-4 py-2 rounded-xl bg-mid text-dark font-medium hover:bg-primary hover:text-white transition text-center block">
+      <a href="<?= htmlspecialchars($dashboardBaseUrl) ?>/?instance=<?= urlencode($instanceId) ?>" class="mt-4 w-full px-4 py-2 rounded-xl bg-mid text-dark font-medium hover:bg-primary hover:text-white transition text-center block">
         ← Voltar ao Painel
       </a>
       <button id="newConversationBtn" class="mt-3 w-full px-4 py-2 rounded-xl border border-primary text-xs text-primary font-medium hover:bg-primary/10">
