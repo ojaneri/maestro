@@ -878,6 +878,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['ajax_save_ai'])) {
         'openai_mode' => $openaiMode,
         'gemini_api_key' => $geminiApiKey,
         'gemini_instruction' => $geminiInstruction,
+        'meta_access_token' => trim($payload['meta_access_token'] ?? ''),
+        'meta_phone_number_id' => trim($payload['meta_phone_number_id'] ?? ''),
     ];
 
     $port = (int)($instanceRecord['port'] ?? 0);
@@ -1726,6 +1728,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_instance']) &&
         $submittedBaseUrl = trim($_POST['instance_base_url']);
     }
 
+    $integrationType = in_array($_POST['integration_type'] ?? 'baileys', ['baileys', 'meta']) ? $_POST['integration_type'] : 'baileys';
+    $metaAccessToken = trim($_POST['meta_access_token'] ?? '');
+    $metaPhoneNumberId = trim($_POST['meta_phone_number_id'] ?? '');
+
     if ($newName === '') {
         $quickConfigError = 'Nome da instância é obrigatório.';
     } else {
@@ -1733,6 +1739,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_instance']) &&
         $updatePayload = [
             'name' => $newName,
             'base_url' => $resolvedBaseUrl,
+            'integration_type' => $integrationType,
+            'meta_access_token' => $metaAccessToken,
+            'meta_phone_number_id' => $metaPhoneNumberId,
             'port' => $selectedInstance['port'] ?? null,
             'api_key' => $selectedInstance['api_key'] ?? null,
             'status' => $selectedInstance['status'] ?? null,
@@ -2150,8 +2159,56 @@ perf_log('index.php render', [
         <button type="button" data-tab-target="tab-ia" class="tab-button">IA</button>
         <button type="button" data-tab-target="tab-agenda" class="tab-button">Agenda</button>
         <button type="button" data-tab-target="tab-automacao" class="tab-button">Automação</button>
+        <button type="button" data-tab-target="tab-templates" class="tab-button" id="templatesTab" <?= $quickConfigIntegrationType !== 'meta' ? 'style="display:none"' : '' ?>>Templates</button>
       </div>
       <div class="tab-contents mt-6 space-y-6">
+        <div data-tab-pane="tab-templates" class="tab-pane space-y-6">
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Approved Templates -->
+            <div class="lg:col-span-1 bg-white border border-mid rounded-2xl p-6 card-soft">
+              <div class="font-medium mb-4">Templates Aprovados</div>
+              <div class="space-y-3">
+                <div class="p-3 border border-green-200 rounded-xl bg-green-50">
+                  <div class="font-medium text-green-800">Boas-vindas</div>
+                  <div class="text-xs text-green-600 mt-1">Template para novos clientes</div>
+                </div>
+                <div class="p-3 border border-green-200 rounded-xl bg-green-50">
+                  <div class="font-medium text-green-800">Confirmação de Agendamento</div>
+                  <div class="text-xs text-green-600 mt-1">Confirmação de horário</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Pending Templates -->
+            <div class="lg:col-span-1 bg-white border border-mid rounded-2xl p-6 card-soft">
+              <div class="font-medium mb-4">Templates Pendentes</div>
+              <div class="space-y-3">
+                <div class="p-3 border border-yellow-200 rounded-xl bg-yellow-50">
+                  <div class="font-medium text-yellow-800">Oferta Especial</div>
+                  <div class="text-xs text-yellow-600 mt-1">Aguardando aprovação</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Add Template -->
+            <div class="lg:col-span-1 bg-white border border-mid rounded-2xl p-6 card-soft">
+              <div class="font-medium mb-4">Adicionar Template</div>
+              <form class="space-y-3">
+                <div>
+                  <label class="text-xs text-slate-500">Nome do Template</label>
+                  <input type="text" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light" placeholder="Nome do template">
+                </div>
+                <div>
+                  <label class="text-xs text-slate-500">Conteúdo</label>
+                  <textarea rows="3" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light" placeholder="Digite o conteúdo do template..."></textarea>
+                </div>
+                <button type="submit" class="w-full px-4 py-2 rounded-xl bg-primary text-white font-medium hover:opacity-90">
+                  Adicionar Template
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
         <div data-tab-pane="tab-general" class="tab-pane space-y-6">
     <!-- GRID -->
     <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
@@ -2238,6 +2295,9 @@ perf_log('index.php render', [
       <?php
       $quickConfigName = $selectedInstance['name'] ?? '';
       $quickConfigBaseUrl = $selectedInstance['base_url'] ?? ("http://127.0.0.1:" . ($selectedInstance['port'] ?? ''));
+      $quickConfigIntegrationType = $selectedInstance['integration_type'] ?? 'baileys';
+      $quickConfigMetaAccessToken = $selectedInstance['meta_access_token'] ?? '';
+      $quickConfigMetaPhoneNumberId = $selectedInstance['meta_phone_number_id'] ?? '';
       ?>
       <form method="POST" class="space-y-3" id="quickConfigForm">
         <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']); ?>">
@@ -2248,13 +2308,39 @@ perf_log('index.php render', [
         </div>
 
         <div>
-          <label class="text-xs text-slate-500">Base URL</label>
-          <input id="quickConfigBaseUrlInput" type="text"
-                 class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                 value="<?= htmlspecialchars($quickConfigBaseUrl) ?>" required>
-          <input type="hidden" id="quickConfigBaseUrlEncoded" name="instance_base_url_b64"
-                 value="<?= htmlspecialchars(base64_encode($quickConfigBaseUrl)) ?>">
-          <noscript class="text-[11px] text-error mt-1 block">JavaScript precisa estar ativo para alterar a Base URL.</noscript>
+          <label class="text-xs text-slate-500">Tipo de Integração</label>
+          <select id="quickConfigIntegrationType" name="integration_type"
+                  class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light" required>
+            <option value="baileys" <?= $quickConfigIntegrationType === 'baileys' ? 'selected' : '' ?>>Baileys</option>
+            <option value="meta" <?= $quickConfigIntegrationType === 'meta' ? 'selected' : '' ?>>Meta (WhatsApp Business API)</option>
+          </select>
+        </div>
+
+        <div id="quickConfigBaileysFields" class="<?= $quickConfigIntegrationType === 'baileys' ? '' : 'hidden' ?>">
+          <div>
+            <label class="text-xs text-slate-500">Base URL</label>
+            <input id="quickConfigBaseUrlInput" type="text"
+                   class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
+                   value="<?= htmlspecialchars($quickConfigBaseUrl) ?>" required>
+            <input type="hidden" id="quickConfigBaseUrlEncoded" name="instance_base_url_b64"
+                   value="<?= htmlspecialchars(base64_encode($quickConfigBaseUrl)) ?>">
+            <noscript class="text-[11px] text-error mt-1 block">JavaScript precisa estar ativo para alterar a Base URL.</noscript>
+          </div>
+        </div>
+
+        <div id="quickConfigMetaFields" class="<?= $quickConfigIntegrationType === 'meta' ? '' : 'hidden' ?>">
+          <div>
+            <label class="text-xs text-slate-500">Meta Access Token</label>
+            <input id="quickConfigMetaAccessToken" type="text" name="meta_access_token"
+                   class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
+                   value="<?= htmlspecialchars($quickConfigMetaAccessToken) ?>" required>
+          </div>
+          <div>
+            <label class="text-xs text-slate-500">Meta Phone Number ID</label>
+            <input id="quickConfigMetaPhoneNumberId" type="text" name="meta_phone_number_id"
+                   class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
+                   value="<?= htmlspecialchars($quickConfigMetaPhoneNumberId) ?>" required>
+          </div>
         </div>
 
         <input type="hidden" name="update_instance" value="1">
@@ -2486,6 +2572,33 @@ perf_log('index.php render', [
                 Utilize sua chave da Google Generative AI.
               </p>
             </div>
+          </div>
+
+          <div class="space-y-4">
+            <div class="text-sm font-medium text-slate-700">Integração com Meta API (WhatsApp Business)</div>
+            <p class="text-[11px] text-slate-500 mb-3">
+              Configure as credenciais para enviar mensagens templates pre-aprovadas via WhatsApp Business API da Meta.
+            </p>
+            
+            <div>
+              <label class="text-xs text-slate-500">Meta Access Token</label>
+              <input id="metaAccessToken" type="password" autocomplete="new-password"
+                     class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
+                     placeholder="EAAM..." value="<?= htmlspecialchars($aiConfig['meta_access_token'] ?? '') ?>">
+              <p class="text-[11px] text-slate-500 mt-1">
+                Token de acesso da Meta para autenticação na WhatsApp Business API.
+              </p>
+            </div>
+            
+            <div>
+              <label class="text-xs text-slate-500">Meta Phone Number ID</label>
+              <input id="metaPhoneNumberId" type="text"
+                     class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
+                     placeholder="1001052093085900" value="<?= htmlspecialchars($aiConfig['meta_phone_number_id'] ?? '') ?>">
+              <p class="text-[11px] text-slate-500 mt-1">
+                ID do número de telefone configurado na WhatsApp Business API (ex: 1001052093085900).
+              </p>
+            </div>
             <div class="space-y-2">
               <div class="flex items-start justify-between gap-2">
                 <label class="text-xs text-slate-500">Instruções do Gemini</label>
@@ -2566,6 +2679,9 @@ perf_log('index.php render', [
                 <span class="font-semibold text-slate-800">optout()</span> – cancela follow-ups e marca o contato para não receber novas tentativas.
               </li>
               <li>
+                <span class="font-semibold text-slate-800">template("ID_Template", "var1", "var2", "var3")</span> – envia uma mensagem template pre-aprovada via Meta API. As variáveis var1, var2 e var3 são opcionais.
+              </li>
+              <li>
                 <span class="font-semibold text-slate-800">status_followup()</span> – resumo de estado, trilhas ativas e próximos agendamentos.
               </li>
               <li>
@@ -2627,6 +2743,7 @@ Instruções de funções:
 - set_contexto("chave","valor") / get_contexto("chave") / limpar_contexto(["chave"]): memória curta por contato para pistas extras.
 - set_variavel("chave","valor") / get_variavel("chave"): variáveis persistentes por instância.
 - optout(): cancela follow-ups pendentes e marca que o cliente não deve receber novas tentativas.
+- template("ID_Template", "var1", "var2", "var3"): envia uma mensagem template pre-aprovada via Meta API. As variáveis var1, var2 e var3 são opcionais.
 - status_followup(): resumo de estado, trilhas ativas e próximos agendamentos pendentes.
 - estado, contexto e status_followup são injetados automaticamente em todo prompt enviado à IA.
 - tempo_sem_interacao(): retorna há quantos segundos o cliente está em silêncio, útil para ajustar o tom (curto = gentil, longo = acolhedor).
@@ -2850,7 +2967,7 @@ Como usar:
       </section>
     </div>
     <div data-tab-pane="tab-automacao" class="tab-pane space-y-6">
-      <section id="audioTranscriptionSection" class="bg-white border border-mid rounded-2xl p-6 card-soft">
+      <section id="audioTranscriptionSection" class="bg-white border border-mid rounded-2xl p-6 card-soft" style="display: <?= $quickConfigIntegrationType === 'baileys' ? '' : 'none' ?>">
         <div class="font-medium mb-1">Transcrever áudio</div>
         <p class="text-sm text-slate-500 mb-4">
           Responda automaticamente com a transcrição do áudio recebido nesta instância.
@@ -2891,7 +3008,7 @@ Como usar:
             <input id="audioTranscriptionPrefix" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
                    value="<?= htmlspecialchars($audioTranscriptionPrefix) ?>" placeholder="🔊">
             <p class="text-[11px] text-slate-500 mt-1">
-              Será enviado como “PREFIXO: texto transcrito”.
+              Será enviado como "PREFIXO: texto transcrito".
             </p>
           </div>
 
@@ -2987,8 +3104,9 @@ Como usar:
             $alarmEntry = $alarmConfig[$eventKey] ?? ['enabled' => false, 'recipients' => '', 'interval' => 120];
             $intervalValue = (int)($alarmEntry['interval'] ?? 120);
             $intervalValue = max(1, min(1440, $intervalValue));
+            $displayStyle = ($quickConfigIntegrationType === 'meta' && $eventKey !== 'error') ? 'style="display:none"' : '';
           ?>
-          <div class="rounded-2xl border border-mid/70 bg-light/60 p-4 space-y-3">
+          <div class="rounded-2xl border border-mid/70 bg-light/60 p-4 space-y-3" data-alarm-event="<?= $eventKey ?>" <?= $displayStyle ?>>
             <div class="flex items-center justify-between gap-3">
               <label class="flex items-center gap-2 text-sm font-medium text-slate-700">
                 <input id="alarm_<?= $eventKey ?>_enabled" type="checkbox" class="h-4 w-4 rounded border-mid text-primary"
@@ -4096,7 +4214,9 @@ document.getElementById('qrResetCancelBtn')?.addEventListener('click', (event) =
       gemini_api_key: getFieldValue('geminiApiKey'),
       gemini_instruction: getFieldValue('geminiInstruction'),
       auto_pause_enabled: document.getElementById('autoPauseEnabled').checked,
-      auto_pause_minutes: Number(getFieldValue('autoPauseMinutes', 5))
+      auto_pause_minutes: Number(getFieldValue('autoPauseMinutes', 5)),
+      meta_access_token: getFieldValue('metaAccessToken'),
+      meta_phone_number_id: getFieldValue('metaPhoneNumberId')
     };
   };
 
@@ -4131,6 +4251,8 @@ document.getElementById('qrResetCancelBtn')?.addEventListener('click', (event) =
       formPayload.set('gemini_instruction', payload.gemini_instruction || '');
       formPayload.set('auto_pause_enabled', payload.auto_pause_enabled ? '1' : '0');
       formPayload.set('auto_pause_minutes', String(payload.auto_pause_minutes || 5));
+      formPayload.set('meta_access_token', payload.meta_access_token || '');
+      formPayload.set('meta_phone_number_id', payload.meta_phone_number_id || '');
 
       const response = await fetch(saveEndpoint, {
         method: 'POST',
@@ -5346,7 +5468,10 @@ document.getElementById('qrResetCancelBtn')?.addEventListener('click', (event) =
   const form = document.getElementById('quickConfigForm');
   const baseUrlInput = document.getElementById('quickConfigBaseUrlInput');
   const encodedInput = document.getElementById('quickConfigBaseUrlEncoded');
-  if (!form || !baseUrlInput || !encodedInput) {
+  const integrationTypeSelect = document.getElementById('quickConfigIntegrationType');
+  const baileysFields = document.getElementById('quickConfigBaileysFields');
+  const metaFields = document.getElementById('quickConfigMetaFields');
+  if (!form || !baseUrlInput || !encodedInput || !integrationTypeSelect || !baileysFields || !metaFields) {
     return;
   }
   const toBase64 = (value) => {
@@ -5364,9 +5489,61 @@ document.getElementById('qrResetCancelBtn')?.addEventListener('click', (event) =
   const syncEncodedValue = () => {
     encodedInput.value = toBase64(baseUrlInput.value || '');
   };
+  const syncIntegrationFields = () => {
+    const integrationType = integrationTypeSelect.value;
+    if (integrationType === 'baileys') {
+      baileysFields.classList.remove('hidden');
+      metaFields.classList.add('hidden');
+    } else {
+      baileysFields.classList.add('hidden');
+      metaFields.classList.remove('hidden');
+    }
+  };
   syncEncodedValue();
+  syncIntegrationFields();
   form.addEventListener('submit', () => {
     syncEncodedValue();
+  });
+  integrationTypeSelect.addEventListener('change', () => {
+    syncIntegrationFields();
+    const templatesTab = document.getElementById('templatesTab');
+    const autoPauseSection = document.getElementById('autoPauseSection');
+    const audioTranscriptionSection = document.getElementById('audioTranscriptionSection');
+    const secretarySection = document.getElementById('secretarySection');
+    const alarmSettingsSection = document.getElementById('alarmSettingsSection');
+
+    if (integrationTypeSelect.value === 'baileys') {
+      templatesTab.style.display = 'none';
+      autoPauseSection.style.display = '';
+      audioTranscriptionSection.style.display = '';
+      secretarySection.style.display = '';
+      // Show all alarm events
+      const alarmEvents = document.querySelectorAll('[data-alarm-event]');
+      alarmEvents.forEach(event => {
+        event.style.display = '';
+      });
+    } else if (integrationTypeSelect.value === 'meta') {
+      templatesTab.style.display = '';
+      autoPauseSection.style.display = 'none';
+      audioTranscriptionSection.style.display = 'none';
+      secretarySection.style.display = 'none';
+      // Show only error alarm
+      const alarmEvents = document.querySelectorAll('[data-alarm-event]');
+      alarmEvents.forEach(event => {
+        const eventKey = event.getAttribute('data-alarm-event');
+        event.style.display = eventKey === 'error' ? '' : 'none';
+      });
+    } else {
+      // Web integration - hide all for now
+      templatesTab.style.display = 'none';
+      autoPauseSection.style.display = 'none';
+      audioTranscriptionSection.style.display = 'none';
+      secretarySection.style.display = 'none';
+      const alarmEvents = document.querySelectorAll('[data-alarm-event]');
+      alarmEvents.forEach(event => {
+        event.style.display = 'none';
+      });
+    }
   });
 })();
 </script>
