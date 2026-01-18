@@ -1,4 +1,6 @@
 <?php
+ini_set('display_errors', 1);
+error_reporting(E_ALL);
 // conversas.php - Intelligent Chat Dashboard
 // WhatsApp-style interface matching the existing design
 
@@ -698,6 +700,12 @@ if (isset($_GET['ajax_send']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="instance-sticky-header">
       <div class="text-sm text-slate-500">Instância selecionada</div>
       <div class="font-semibold text-dark"><?= htmlspecialchars($instance['name'] ?? 'Nenhuma instância') ?></div>
+      <?php 
+        $isMetaApi = !empty($instance['ai']['meta_access_token']) && !empty($instance['ai']['meta_phone_number_id']);
+        echo '<div class="text-xs text-slate-500">';
+        echo $isMetaApi ? 'Integração: Meta API' : 'Integração: Baileys';
+        echo '</div>';
+      ?>
     </div>
     <div class="flex flex-col flex-1 min-h-0 relative">
     <!-- CHAT HEADER -->
@@ -1835,6 +1843,20 @@ function renderMessages(remoteJid) {
             isErrorMessage ? 'message-error' : ''
         ].filter(Boolean).join(' ');
 
+        // Meta API metadata
+        const metaStatus = metadata?.meta_status;
+        let statusIndicator = '';
+        if (metaStatus) {
+            const statusConfig = {
+                'sent': { text: 'Enviada', color: 'text-blue-600' },
+                'delivered': { text: 'Entregue', color: 'text-green-600' },
+                'read': { text: 'Lida', color: 'text-purple-600' },
+                'failed': { text: 'Falha', color: 'text-red-600' }
+            };
+            const config = statusConfig[metaStatus] || { text: metaStatus, color: 'text-slate-500' };
+            statusIndicator = `<div class="text-[10px] ${config.color} mt-1">${config.text}</div>`;
+        }
+
         return `
             <div class="flex ${isOutgoing ? 'justify-end' : 'justify-start'} flex-col">
                 <div class="message-bubble ${bubbleClasses} p-3">
@@ -1842,6 +1864,7 @@ function renderMessages(remoteJid) {
                     <div class="text-xs mt-1 opacity-70">${time}</div>
                     ${functionResults.length ? `<div class="function-result">${functionResults.map(text => escapeHtml(text)).join('<br>')}</div>` : ''}
                     ${errorDetails}
+                    ${statusIndicator}
                 </div>
                 ${commandSection}
             </div>

@@ -283,6 +283,16 @@ function normalizeAlarmInterval($value, $unit = ''): int
     return max(1, min(1440, $interval));
 }
 
+const INSTANCE_META_SETTING_KEYS = [
+    'meta_phone_number_id',
+    'meta_business_account_id',
+    'meta_access_token',
+    'meta_verify_token',
+    'meta_app_secret',
+    'meta_api_version',
+    'meta_status'
+];
+
 function buildInstanceAlarmMetadata(array $settings): array
 {
     $events = ['whatsapp', 'server', 'error'];
@@ -305,6 +315,24 @@ function buildInstanceAlarmMetadata(array $settings): array
     }
 
     return $metadata;
+}
+
+function fetchInstanceMetaSettings(SQLite3 $db, string $instanceId): array
+{
+    return fetchInstanceSettingsByKeys($db, $instanceId, INSTANCE_META_SETTING_KEYS);
+}
+
+function buildInstanceMetaMetadata(array $settings): array
+{
+    return [
+        'phone_number_id' => $settings['meta_phone_number_id'] ?? null,
+        'business_account_id' => $settings['meta_business_account_id'] ?? null,
+        'access_token' => $settings['meta_access_token'] ?? null,
+        'verify_token' => $settings['meta_verify_token'] ?? null,
+        'app_secret' => $settings['meta_app_secret'] ?? null,
+        'api_version' => $settings['meta_api_version'] ?? 'v22.0',
+        'status' => $settings['meta_status'] ?? null
+    ];
 }
 
 const CALENDAR_PENDING_STATE_TTL_MS = 10 * 60 * 1000;
@@ -438,6 +466,8 @@ function loadInstancesFromDatabase(): array
             $row['secretary'] = buildSecretaryMetadata($secretarySettings);
             $alarmSettings = fetchInstanceAlarmSettings($db, $instanceId);
             $row['alarms'] = buildInstanceAlarmMetadata($alarmSettings);
+            $metaSettings = fetchInstanceMetaSettings($db, $instanceId);
+            $row['meta'] = buildInstanceMetaMetadata($metaSettings);
             ensureInstanceHasApiKey($db, $row);
             $instances[$instanceId] = $row;
         }
@@ -486,6 +516,8 @@ function loadInstanceRecordFromDatabase(string $instanceId): ?array
             $row['secretary'] = buildSecretaryMetadata($secretarySettings);
             $alarmSettings = fetchInstanceAlarmSettings($db, $instanceId);
             $row['alarms'] = buildInstanceAlarmMetadata($alarmSettings);
+            $metaSettings = fetchInstanceMetaSettings($db, $instanceId);
+            $row['meta'] = buildInstanceMetaMetadata($metaSettings);
             ensureInstanceHasApiKey($db, $row);
             $record = $row;
         }

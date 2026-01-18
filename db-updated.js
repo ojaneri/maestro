@@ -80,6 +80,50 @@ const AUTH_STATE_TABLE_SQL = `
     )
 `
 
+const META_TEMPLATES_TABLE_SQL = `
+    CREATE TABLE IF NOT EXISTS meta_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        instance_id TEXT NOT NULL,
+        template_name TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('approved', 'pending', 'rejected')) DEFAULT 'pending',
+        category TEXT,
+        language TEXT NOT NULL DEFAULT 'pt_BR',
+        components_json TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(instance_id, template_name, language)
+    )
+`
+
+const META_WEBHOOK_EVENTS_TABLE_SQL = `
+    CREATE TABLE IF NOT EXISTS meta_webhook_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        instance_id TEXT NOT NULL,
+        phone_number_id TEXT,
+        event_type TEXT NOT NULL,
+        event_data TEXT,
+        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+        processed INTEGER NOT NULL DEFAULT 0
+    )
+`
+
+const META_INSTANCE_CONFIG_TABLE_SQL = `
+    CREATE TABLE IF NOT EXISTS meta_instance_config (
+        instance_id TEXT PRIMARY KEY,
+        phone_number_id TEXT,
+        business_account_id TEXT,
+        access_token TEXT,
+        verify_token TEXT,
+        app_secret TEXT,
+        phone_number TEXT,
+        display_phone_number TEXT,
+        api_version TEXT NOT NULL DEFAULT 'v22.0',
+        status TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+`
+
 // Initialize database
 function initDatabase() {
     return new Promise((resolve, reject) => {
@@ -105,9 +149,80 @@ function initDatabase() {
                     .then(() => ensureCalendarSchema(db))
                     .then(() => ensureTemperatureColumn(db))
                     .then(() => ensureTaxaRColumn(db))
+                    .then(() => ensureMetaTemplatesSchema(db))
+                    .then(() => ensureMetaWebhookEventsSchema(db))
+                    .then(() => ensureMetaInstanceConfigSchema(db))
                     .then(() => resolve(db))
                     .catch(reject)
             }
+        })
+    })
+}
+
+function ensureMetaTemplatesSchema(db) {
+    return new Promise((resolve, reject) => {
+        const sql = `
+            CREATE TABLE IF NOT EXISTS meta_templates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                instance_id TEXT NOT NULL,
+                template_name TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('approved', 'pending', 'rejected')) DEFAULT 'pending',
+                category TEXT,
+                language TEXT NOT NULL DEFAULT 'pt_BR',
+                components_json TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(instance_id, template_name, language)
+            )
+        `
+        db.run(sql, err => {
+            if (err) reject(err)
+            else resolve()
+        })
+    })
+}
+
+function ensureMetaWebhookEventsSchema(db) {
+    return new Promise((resolve, reject) => {
+        const sql = `
+            CREATE TABLE IF NOT EXISTS meta_webhook_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                instance_id TEXT NOT NULL,
+                phone_number_id TEXT,
+                event_type TEXT NOT NULL,
+                event_data TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                processed INTEGER NOT NULL DEFAULT 0
+            )
+        `
+        db.run(sql, err => {
+            if (err) reject(err)
+            else resolve()
+        })
+    })
+}
+
+function ensureMetaInstanceConfigSchema(db) {
+    return new Promise((resolve, reject) => {
+        const sql = `
+            CREATE TABLE IF NOT EXISTS meta_instance_config (
+                instance_id TEXT PRIMARY KEY,
+                phone_number_id TEXT,
+                business_account_id TEXT,
+                access_token TEXT,
+                verify_token TEXT,
+                app_secret TEXT,
+                phone_number TEXT,
+                display_phone_number TEXT,
+                api_version TEXT NOT NULL DEFAULT 'v22.0',
+                status TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `
+        db.run(sql, err => {
+            if (err) reject(err)
+            else resolve()
         })
     })
 }
@@ -317,7 +432,10 @@ const contactMetadataSQL = `
             whatsappCacheSQL,
             contactContextSQL,
             eventLogsSQL,
-            AUTH_STATE_TABLE_SQL
+            AUTH_STATE_TABLE_SQL,
+            META_TEMPLATES_TABLE_SQL,
+            META_WEBHOOK_EVENTS_TABLE_SQL,
+            META_INSTANCE_CONFIG_TABLE_SQL
         ]
 
         const indexes = [
@@ -343,7 +461,16 @@ const contactMetadataSQL = `
             'CREATE INDEX IF NOT EXISTS idx_contact_context_remote ON contact_context(remote_jid)',
             'CREATE INDEX IF NOT EXISTS idx_event_logs_instance ON event_logs(instance_id)',
             'CREATE INDEX IF NOT EXISTS idx_event_logs_remote ON event_logs(remote_jid)',
-            'CREATE INDEX IF NOT EXISTS idx_persistent_vars_instance ON persistent_variables(instance_id)'
+            'CREATE INDEX IF NOT EXISTS idx_persistent_vars_instance ON persistent_variables(instance_id)',
+            'CREATE INDEX IF NOT EXISTS idx_meta_templates_instance ON meta_templates(instance_id)',
+            'CREATE INDEX IF NOT EXISTS idx_meta_templates_status ON meta_templates(status)',
+            'CREATE INDEX IF NOT EXISTS idx_meta_templates_name ON meta_templates(template_name)',
+            'CREATE INDEX IF NOT EXISTS idx_meta_webhook_events_instance ON meta_webhook_events(instance_id)',
+            'CREATE INDEX IF NOT EXISTS idx_meta_webhook_events_type ON meta_webhook_events(event_type)',
+            'CREATE INDEX IF NOT EXISTS idx_meta_webhook_events_processed ON meta_webhook_events(processed)',
+            'CREATE INDEX IF NOT EXISTS idx_meta_webhook_events_timestamp ON meta_webhook_events(timestamp)',
+            'CREATE INDEX IF NOT EXISTS idx_meta_config_instance ON meta_instance_config(instance_id)',
+            'CREATE INDEX IF NOT EXISTS idx_meta_config_phone ON meta_instance_config(phone_number)'
         ]
 
         db.serialize(() => {
@@ -2292,6 +2419,282 @@ async function getGlobalTaxaRAverage(instanceId) {
     })
 }
 
+// Meta API Templates functions
+async function upsertMetaTemplate(instanceId, templateName, payload = {}) {
+    const db = new sqlite3.Database(DB_PATH)
+    const {
+        status = 'pending',
+        category = null,
+        language = 'pt_BR',
+        components = null
+    } = payload
+    const componentsJson = components ? JSON.stringify(components) : null
+
+    return new Promise((resolve, reject) => {
+        const sql = `
+            INSERT INTO meta_templates (instance_id, template_name, status, category, language, components_json, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(instance_id, template_name, language) DO UPDATE SET
+                status = excluded.status,
+                category = excluded.category,
+                components_json = excluded.components_json,
+                updated_at = CURRENT_TIMESTAMP
+        `
+        db.run(sql, [instanceId, templateName, status, category, language, componentsJson], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ updated: this.changes })
+        })
+    })
+}
+
+async function getMetaTemplate(instanceId, templateName, language = 'pt_BR') {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT id, instance_id, template_name, status, category, language, components_json, created_at, updated_at
+            FROM meta_templates
+            WHERE instance_id = ? AND template_name = ? AND language = ?
+            LIMIT 1
+        `
+        db.get(sql, [instanceId, templateName, language], (err, row) => {
+            db.close()
+            if (err) reject(err)
+            else if (row) {
+                resolve({
+                    ...row,
+                    components: row.components_json ? JSON.parse(row.components_json) : null
+                })
+            } else {
+                resolve(null)
+            }
+        })
+    })
+}
+
+async function listMetaTemplates(instanceId, status = null, language = null) {
+    const db = new sqlite3.Database(DB_PATH)
+    const filters = ['instance_id = ?']
+    const params = [instanceId]
+    
+    if (status) {
+        filters.push('status = ?')
+        params.push(status)
+    }
+    if (language) {
+        filters.push('language = ?')
+        params.push(language)
+    }
+
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT id, instance_id, template_name, status, category, language, components_json, created_at, updated_at
+            FROM meta_templates
+            WHERE ${filters.join(' AND ')}
+            ORDER BY template_name ASC, language ASC
+        `
+        db.all(sql, params, (err, rows) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(rows.map(row => ({
+                ...row,
+                components: row.components_json ? JSON.parse(row.components_json) : null
+            })))
+        })
+    })
+}
+
+async function deleteMetaTemplate(instanceId, templateName, language = 'pt_BR') {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `DELETE FROM meta_templates WHERE instance_id = ? AND template_name = ? AND language = ?`
+        db.run(sql, [instanceId, templateName, language], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ deleted: this.changes })
+        })
+    })
+}
+
+// Meta API Webhook Events functions
+async function logMetaWebhookEvent(instanceId, eventType, eventData, phoneNumberId = null) {
+    const db = new sqlite3.Database(DB_PATH)
+    const eventDataJson = JSON.stringify(eventData)
+    
+    return new Promise((resolve, reject) => {
+        const sql = `
+            INSERT INTO meta_webhook_events (instance_id, phone_number_id, event_type, event_data)
+            VALUES (?, ?, ?, ?)
+        `
+        db.run(sql, [instanceId, phoneNumberId, eventType, eventDataJson], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ loggedId: this.lastID })
+        })
+    })
+}
+
+async function getMetaWebhookEvents(instanceId, eventType = null, processed = null, limit = 100) {
+    const db = new sqlite3.Database(DB_PATH)
+    const filters = ['instance_id = ?']
+    const params = [instanceId]
+    
+    if (eventType) {
+        filters.push('event_type = ?')
+        params.push(eventType)
+    }
+    if (processed !== null) {
+        filters.push('processed = ?')
+        params.push(processed ? 1 : 0)
+    }
+
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT id, instance_id, phone_number_id, event_type, event_data, timestamp, processed
+            FROM meta_webhook_events
+            WHERE ${filters.join(' AND ')}
+            ORDER BY timestamp DESC
+            LIMIT ?
+        `
+        db.all(sql, [...params, limit], (err, rows) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(rows.map(row => ({
+                ...row,
+                event_data: row.event_data ? JSON.parse(row.event_data) : null
+            })))
+        })
+    })
+}
+
+async function markMetaWebhookEventAsProcessed(eventId) {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            UPDATE meta_webhook_events
+            SET processed = 1
+            WHERE id = ?
+        `
+        db.run(sql, [eventId], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ updated: this.changes })
+        })
+    })
+}
+
+async function deleteMetaWebhookEvents(instanceId, olderThan = null) {
+    const db = new sqlite3.Database(DB_PATH)
+    const filters = ['instance_id = ?']
+    const params = [instanceId]
+    
+    if (olderThan) {
+        filters.push('timestamp < ?')
+        params.push(olderThan)
+    }
+
+    return new Promise((resolve, reject) => {
+        const sql = `DELETE FROM meta_webhook_events WHERE ${filters.join(' AND ')}`
+        db.run(sql, params, function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ deleted: this.changes })
+        })
+    })
+}
+
+// Meta API Instance Configuration functions
+async function upsertMetaInstanceConfig(instanceId, payload = {}) {
+    const db = new sqlite3.Database(DB_PATH)
+    const {
+        phone_number_id = null,
+        business_account_id = null,
+        access_token = null,
+        verify_token = null,
+        app_secret = null,
+        phone_number = null,
+        display_phone_number = null,
+        api_version = 'v22.0',
+        status = null
+    } = payload
+
+    return new Promise((resolve, reject) => {
+        const sql = `
+            INSERT INTO meta_instance_config (
+                instance_id, phone_number_id, business_account_id, access_token, verify_token, 
+                app_secret, phone_number, display_phone_number, api_version, status, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(instance_id) DO UPDATE SET
+                phone_number_id = excluded.phone_number_id,
+                business_account_id = excluded.business_account_id,
+                access_token = excluded.access_token,
+                verify_token = excluded.verify_token,
+                app_secret = excluded.app_secret,
+                phone_number = excluded.phone_number,
+                display_phone_number = excluded.display_phone_number,
+                api_version = excluded.api_version,
+                status = excluded.status,
+                updated_at = CURRENT_TIMESTAMP
+        `
+        db.run(sql, [
+            instanceId, phone_number_id, business_account_id, access_token, verify_token,
+            app_secret, phone_number, display_phone_number, api_version, status
+        ], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ updated: this.changes })
+        })
+    })
+}
+
+async function getMetaInstanceConfig(instanceId) {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT instance_id, phone_number_id, business_account_id, access_token, verify_token,
+                   app_secret, phone_number, display_phone_number, api_version, status, created_at, updated_at
+            FROM meta_instance_config
+            WHERE instance_id = ?
+            LIMIT 1
+        `
+        db.get(sql, [instanceId], (err, row) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(row || null)
+        })
+    })
+}
+
+async function deleteMetaInstanceConfig(instanceId) {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `DELETE FROM meta_instance_config WHERE instance_id = ?`
+        db.run(sql, [instanceId], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ deleted: this.changes })
+        })
+    })
+}
+
+async function listMetaInstanceConfigs() {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT instance_id, phone_number_id, business_account_id, phone_number, 
+                   display_phone_number, api_version, status, created_at, updated_at
+            FROM meta_instance_config
+            ORDER BY created_at ASC
+        `
+        db.all(sql, [], (err, rows) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(rows || [])
+        })
+    })
+}
+
 // Auth State functions
 async function getAuthState(instanceId, key) {
     if (!instanceId || !key) {
@@ -2438,6 +2841,19 @@ module.exports = {
     saveInstanceRecord,
     getInstanceRecord,
     listInstancesRecords,
+    // Meta API
+    upsertMetaTemplate,
+    getMetaTemplate,
+    listMetaTemplates,
+    deleteMetaTemplate,
+    logMetaWebhookEvent,
+    getMetaWebhookEvents,
+    markMetaWebhookEventAsProcessed,
+    deleteMetaWebhookEvents,
+    upsertMetaInstanceConfig,
+    getMetaInstanceConfig,
+    deleteMetaInstanceConfig,
+    listMetaInstanceConfigs,
     // Chats
     getChats,
     // Health

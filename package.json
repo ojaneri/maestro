@@ -5,6 +5,7 @@
   "main": "whatsapp-server-intelligent.js",
   "scripts": {
     "start": "node whatsapp-server-intelligent.js",
+    "meta": "node master-meta.js",
     "migrate-instances": "node migrate_instances.js"
   },
   "dependencies": {

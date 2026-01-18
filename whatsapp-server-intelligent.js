@@ -1171,7 +1171,9 @@ const AI_SETTING_KEYS = [
     "gemini_instruction",
     "ai_multi_input_delay",
     "auto_pause_enabled",
-    "auto_pause_minutes"
+    "auto_pause_minutes",
+    "meta_access_token",
+    "meta_phone_number_id"
 ]
 const AUDIO_TRANSCRIPTION_SETTING_KEYS = [
     "audio_transcription_enabled",
@@ -1336,7 +1338,8 @@ const assistantFunctionNames = [
     "optout",
     "status_followup",
     "log_evento",
-    "tempo_sem_interacao"
+    "tempo_sem_interacao",
+    "template"
 ]
 
 const assistantCommandPattern = `\\b(${assistantFunctionNames.join("|")})\\s*\\(`
@@ -2674,6 +2677,79 @@ async function handleAssistantCommands(remoteJid, aiText, providedConfig = null,
                         seconds,
                         lastTimestamp: lastInbound?.toISOString() || null
                     })
+                    break
+                }
+                case "template": {
+                    const templateId = (command.args[0] || "").trim()
+                    if (!templateId) {
+                        throw new Error("template(): ID do template é obrigatório")
+                    }
+                    const params = command.args.slice(1).map(arg => (arg || "").trim())
+                    
+                    // Verificar se a mensagem está dentro da janela de 24 horas
+                    if (!db) {
+                        throw new Error("template(): banco de dados indisponível")
+                    }
+                    const lastInbound = await db.getTimeSinceLastInboundMessage(INSTANCE_ID, remoteJid)
+                    const TWENTY_FOUR_HOURS_IN_MS = 24 * 60 * 60 * 1000
+                    if (!lastInbound || (Date.now() - lastInbound.getTime()) > TWENTY_FOUR_HOURS_IN_MS) {
+                        const errorMessage = "Mensagem depois de 24hs do envio do cliente não são aceitas. Por favor, só envie mensagens até 24hs do contato do cliente, ou então use a função para enviar as mensagens pre-aprovadas abaixo\n\nTemplate|1|Oi tudo bem {1}? Como vai você na cidade de {2}\nTemplate|2|Ola {1}? Como vai você na cidade de {2}\nTemplate|3|{1} esta por ai? Como vai você na cidade de {2}, e {3}?\n\nPara enviar, envie somente \ntemplate(\"1\", \"Osvaldo\", \"Fortaleza\", \"Eusebio\") ou\ntemplate(\"1\", \"Osvaldo\", \"Fortaleza\", \"Eusebio\")&&& funcoes adicionais\n\nsendo {1}, {2} e {3} os valores as variaveis a serem substituidas no modelo"
+                        throw new Error(errorMessage)
+                    }
+                    
+                    // Obter configurações da Meta API (access token e phone number id)
+                    const instanceSettings = await db.getSettings(INSTANCE_ID, ["meta_access_token", "meta_phone_number_id"])
+                    const accessToken = (instanceSettings.meta_access_token || "").trim()
+                    const phoneNumberId = (instanceSettings.meta_phone_number_id || "").trim()
+                    
+                    if (!accessToken || !phoneNumberId) {
+                        throw new Error("template(): Configurações da Meta API não encontradas (access token ou phone number id faltando)")
+                    }
+                    
+                    // Enviar mensagem template via Meta API
+                    const metaUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`
+                    const templatePayload = {
+                        messaging_product: "whatsapp",
+                        to: extractPhoneFromJid(remoteJid),
+                        type: "template",
+                        template: {
+                            name: templateId,
+                            language: { code: "pt_BR" },
+                            components: []
+                        }
+                    }
+                    
+                    // Adicionar parâmetros ao template
+                    if (params.length > 0) {
+                        templatePayload.template.components.push({
+                            type: "body",
+                            parameters: params.map(param => ({
+                                type: "text",
+                                text: param
+                            }))
+                        })
+                    }
+                    
+                    log("Enviando template via Meta API:", templateId, params)
+                    const metaResponse = await fetch(metaUrl, {
+                        method: "POST",
+                        headers: {
+                            "Authorization": `Bearer ${accessToken}`,
+                            "Content-Type": "application/json"
+                        },
+                        body: JSON.stringify(templatePayload)
+                    })
+                    
+                    if (!metaResponse.ok) {
+                        const errorData = await metaResponse.json().catch(() => null)
+                        const errorMsg = errorData?.error?.message || `Erro HTTP ${metaResponse.status}`
+                        throw new Error(`template(): Falha ao enviar template: ${errorMsg}`)
+                    }
+                    
+                    const responseData = await metaResponse.json()
+                    log("Template enviado com sucesso:", responseData)
+                    functionNotes.push(`Template ${templateId} enviado com ${params.length} parâmetro(s)`)
+                    result = buildFunctionResult(true, "OK", "Template enviado com sucesso", responseData)
                     break
                 }
                 case "boomerang": {
@@ -4352,7 +4428,9 @@ async function loadAIConfig() {
             openai_api_key: "",
             openai_mode: "responses",
             gemini_api_key: "",
-            gemini_instruction: ""
+            gemini_instruction: "",
+            meta_access_token: "",
+            meta_phone_number_id: ""
         }
     }
 
@@ -4380,7 +4458,9 @@ async function loadAIConfig() {
         gemini_api_key: settings.gemini_api_key || "",
         gemini_instruction: settings.gemini_instruction || "",
         auto_pause_enabled: settings.auto_pause_enabled === "true",
-        auto_pause_minutes: Math.max(1, toNumber(settings.auto_pause_minutes, 5))
+        auto_pause_minutes: Math.max(1, toNumber(settings.auto_pause_minutes, 5)),
+        meta_access_token: settings.meta_access_token || "",
+        meta_phone_number_id: settings.meta_phone_number_id || ""
     }
 }
 
@@ -4480,7 +4560,9 @@ async function persistAIConfig(payload) {
         openai_mode,
         gemini_api_key,
         gemini_instruction,
-        multi_input_delay
+        multi_input_delay,
+        meta_access_token,
+        meta_phone_number_id
     } = payload
 
     const numericHistory = Math.max(1, toNumber(history_limit, DEFAULT_HISTORY_LIMIT))
@@ -4502,7 +4584,9 @@ async function persistAIConfig(payload) {
             ["openai_mode", openai_mode || "responses"],
         ["gemini_api_key", gemini_api_key || ""],
         ["gemini_instruction", gemini_instruction || ""],
-        ["ai_multi_input_delay", String(delaySeconds)]
+        ["ai_multi_input_delay", String(delaySeconds)],
+        ["meta_access_token", meta_access_token || ""],
+        ["meta_phone_number_id", meta_phone_number_id || ""]
     ]
 
     for (const [key, value] of entries) {

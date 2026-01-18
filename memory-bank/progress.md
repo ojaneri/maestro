@@ -16,6 +16,9 @@
 - ✅ Campaign management and scheduled messages
 - ✅ File upload and media handling
 - ✅ RESTful API for external integrations
+- ✅ Meta API integration with message templates
+- ✅ Conditional UI rendering for different integration types (Baileys/Meta)
+- ✅ Message status tracking (sent, delivered, read, failed) for Meta API
 
 ## What's Left to Build
 

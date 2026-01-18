@@ -1,0 +1,8 @@
+[2026-01-18T22:12:00.484Z] Meta API Server is running on port 3005
+[2026-01-18T22:12:00.486Z] Health check: http://localhost:3005/health
+[2026-01-18T22:12:00.487Z] Webhook endpoint: http://localhost:3005/webhook
+[2026-01-18T22:15:02.336Z] Sending template message: {"phoneNumberId":"12345","to":"5511999999999","template":"test_template","paramsCount":2}
+[2026-01-18T22:15:02.667Z] Template message failed: {"error":{"message":"Invalid OAuth access token - Cannot parse access token","type":"OAuthException","code":190,"fbtrace_id":"AaNe-bhgee-lqT7H5YxckvN"}}
+[2026-01-18T22:15:02.668Z] Error sending template message: {}
+"message":"Invalid OAuth access token - Cannot parse access token","type":"OAuthException","code":190,"fbtrace_id":"AaNe-bhgee-lqT7H5YxckvN"}}
+[2026-01-18T22:15:02.668Z] Error sending template message: {}
