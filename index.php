@@ -983,6 +983,7 @@ $dashboardBaseUrl = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/');
 if ($dashboardBaseUrl === '') {
   $dashboardBaseUrl = '/';
 }
+$baseRedirectUrl = rtrim($dashboardBaseUrl, '/') . '/';
 $dashboardLogoUrl = "{$dashboardBaseUrl}/assets/maestro-logo.png";
 
 if (!function_exists('buildPublicBaseUrl')) {
@@ -1528,7 +1529,7 @@ if (isset($_POST['create'])) {
     debug_log('Executed create_instance.sh for ' . $id . ' on port ' . $nextPort);
 
     debug_log('Redirecting to /api/envio/wpp/ after create');
-    header("Location: /api/envio/wpp/");
+    header("Location: " . $baseRedirectUrl);
     exit;
 }
 
@@ -1545,7 +1546,7 @@ if (isset($_GET["delete"])) {
         debug_log('Instance could not be removed from SQLite (maybe missing): ' . $deleteId);
     }
     debug_log('Redirecting to /api/envio/wpp/ after delete');
-    header("Location: /api/envio/wpp/");
+    header("Location: " . $baseRedirectUrl);
     exit;
 }
 
@@ -1659,14 +1660,14 @@ if (isset($_POST["disconnect"])) {
             debug_log('Disconnect requested but port not found for ' . $id);
         }
     }
-    header("Location: /api/envio/wpp/");
+    header("Location: " . $baseRedirectUrl);
     exit;
 }
 
 if (isset($_GET['logout'])) {
     debug_log('Logout requested');
     session_destroy();
-    header("Location: /api/envio/wpp/");
+    header("Location: " . $baseRedirectUrl);
     exit;
 }
 
