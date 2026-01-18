@@ -984,7 +984,7 @@ if ($dashboardBaseUrl === '') {
   $dashboardBaseUrl = '/';
 }
 $baseRedirectUrl = rtrim($dashboardBaseUrl, '/') . '/';
-$dashboardLogoUrl = "{$dashboardBaseUrl}/assets/maestro-logo.png";
+$dashboardLogoUrl = buildPublicBaseUrl($dashboardBaseUrl . '/assets/maestro-logo.png');
 
 if (!function_exists('buildPublicBaseUrl')) {
     function buildPublicBaseUrl(string $basePath): string
