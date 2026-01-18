@@ -62,6 +62,16 @@ function isPortOpen($host, $port, $timeout = 1) {
     }
 }
 
+if (!function_exists('buildPublicBaseUrl')) {
+    function buildPublicBaseUrl(string $basePath): string
+    {
+        $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+        $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+        $normalized = rtrim($basePath, '/');
+        return "{$scheme}://{$host}{$normalized}";
+    }
+}
+
 function dados(string $email): array {
     $email = trim($email);
     if ($email === '') {
@@ -986,15 +996,7 @@ if ($dashboardBaseUrl === '') {
 $baseRedirectUrl = rtrim($dashboardBaseUrl, '/') . '/';
 $dashboardLogoUrl = buildPublicBaseUrl($dashboardBaseUrl . '/assets/maestro-logo.png');
 
-if (!function_exists('buildPublicBaseUrl')) {
-    function buildPublicBaseUrl(string $basePath): string
-    {
-        $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-        $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
-        $normalized = rtrim($basePath, '/');
-        return "{$scheme}://{$host}{$normalized}";
-    }
-}
+
 
 if (!function_exists('renderSidebarContent')) {
     function renderSidebarContent(array $instances, ?string $selectedInstanceId, array $statuses, array $connectionStatuses, bool $showAdminControls = true)
