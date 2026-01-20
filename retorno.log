@@ -1,3 +1,11 @@
 2026-01-18 22:11:44 - Webhook request received
 2026-01-18 22:11:44 - Raw input: ...
 2026-01-18 22:11:44 - Invalid request - missing object field
+2026-01-19 13:31:08 - Webhook request received
+2026-01-19 13:31:08 - Raw input: ...
+2026-01-19 13:31:08 - GET request - verification mode
+2026-01-19 13:31:08 - Verification failed - invalid token
+2026-01-19 13:31:16 - Webhook request received
+2026-01-19 13:31:16 - Raw input: ...
+2026-01-19 13:31:16 - GET request - verification mode
+2026-01-19 13:31:16 - Verification failed - invalid token

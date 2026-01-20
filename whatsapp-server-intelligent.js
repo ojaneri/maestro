@@ -1153,6 +1153,7 @@ const DEFAULT_PROVIDER = "openai"
 const DEFAULT_GEMINI_INSTRUCTION = "Você é um assistente atencioso e prestativo. Mantenha o tom profissional e informal. Sempre separe claramente o texto visível ao usuário do bloco de instruções/funções usando o marcador lógico &&& antes de iniciar os comandos."
 const DEFAULT_MULTI_INPUT_DELAY = 0
 const DEFAULT_AUDIO_TRANSCRIPTION_PREFIX = "🔊"
+const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai"
 const DEFAULT_SCHEDULE_TAG = "default"
 const DEFAULT_SCHEDULE_TIPO = "followup"
 const AI_SETTING_KEYS = [
@@ -1161,6 +1162,8 @@ const AI_SETTING_KEYS = [
     "openai_api_key",
     "openai_mode",
     "ai_model",
+    "ai_model_fallback_1",
+    "ai_model_fallback_2",
     "ai_system_prompt",
     "ai_assistant_prompt",
     "ai_assistant_id",
@@ -1169,6 +1172,8 @@ const AI_SETTING_KEYS = [
     "ai_max_tokens",
     "gemini_api_key",
     "gemini_instruction",
+    "openrouter_api_key",
+    "openrouter_base_url",
     "ai_multi_input_delay",
     "auto_pause_enabled",
     "auto_pause_minutes",
@@ -2959,6 +2964,58 @@ function buildResponsesPayload(historyMessages, messageBody, config) {
     return conversation
 }
 
+const DEFAULT_MODEL_BY_PROVIDER = {
+    openai: "gpt-4.1-mini",
+    gemini: "gemini-2.5-flash",
+    openrouter: "gpt-4o-mini"
+}
+
+function buildModelCandidates(aiConfig) {
+    const provider = (aiConfig.provider || DEFAULT_PROVIDER).toLowerCase()
+    const fallbackOrder = [
+        (aiConfig.model || "").trim(),
+        (aiConfig.model_fallback_1 || "").trim(),
+        (aiConfig.model_fallback_2 || "").trim()
+    ]
+    const normalized = []
+    const defaultModel = DEFAULT_MODEL_BY_PROVIDER[provider] || DEFAULT_MODEL_BY_PROVIDER[DEFAULT_PROVIDER]
+
+    fallbackOrder.forEach((model, index) => {
+        const candidate = model || (index === 0 ? defaultModel : "")
+        if (candidate && !normalized.includes(candidate)) {
+            normalized.push(candidate)
+        }
+    })
+
+    if (!normalized.length && defaultModel) {
+        normalized.push(defaultModel)
+    }
+
+    return normalized
+}
+
+async function attemptModelSequence(models, worker) {
+    if (!Array.isArray(models) || !models.length) {
+        throw new Error("Nenhum modelo configurado")
+    }
+    let lastError = null
+    for (const model of models) {
+        try {
+            const result = await worker(model)
+            if (result) {
+                return result
+            }
+        } catch (err) {
+            lastError = err
+            log("model attempt failed", {
+                model,
+                error: err?.message || err
+            })
+        }
+    }
+    throw lastError || new Error("Todos os modelos falharam")
+}
+
 function collectResponseText(response) {
     if (!response) return null
     if (typeof response.output_text === "string" && response.output_text.trim()) {
@@ -2979,6 +3036,67 @@ function collectResponseText(response) {
         }
     }
     return fragments.join(" ").trim() || null
+}
+
+function extractOpenRouterText(payload) {
+    if (!payload) {
+        return null
+    }
+
+    const normalizeContent = (value) => {
+        if (!value) {
+            return null
+        }
+        if (typeof value === "string" && value.trim()) {
+            return value.trim()
+        }
+        if (Array.isArray(value)) {
+            const fragments = value
+                .map(part => {
+                    if (typeof part === "string") {
+                        return part
+                    }
+                    if (part && typeof part.text === "string") {
+                        return part.text
+                    }
+                    if (part && typeof part.value === "string") {
+                        return part.value
+                    }
+                    return ""
+                })
+                .filter(Boolean)
+            if (fragments.length) {
+                return fragments.join(" ").trim()
+            }
+        }
+        if (typeof value === "object") {
+            if (typeof value.text === "string" && value.text.trim()) {
+                return value.text.trim()
+            }
+            if (typeof value.value === "string" && value.value.trim()) {
+                return value.value.trim()
+            }
+        }
+        return null
+    }
+
+    const choice = Array.isArray(payload.choices) ? payload.choices[0] : null
+    if (choice) {
+        const messageContent = normalizeContent(choice.message?.content || choice.message?.text)
+        if (messageContent) {
+            return messageContent
+        }
+        const textContent = normalizeContent(choice.text)
+        if (textContent) {
+            return textContent
+        }
+    }
+
+    return normalizeContent(payload.message?.content)
+        || normalizeContent(payload.text)
+        || normalizeContent(payload.response)
+        || normalizeContent(payload.result)
+        || null
 }
 
 const pendingMultiInputs = new Map()
@@ -3133,26 +3251,83 @@ async function generateOpenAIResponse(aiConfig, remoteJid, messageBody) {
     }
 
     const historyMessages = await fetchHistoryRows(remoteJid, aiConfig.history_limit)
-    log("generateOpenAIResponse (Responses mode)", {
-        remoteJid,
-        model: aiConfig.model,
-        historyLength: historyMessages.length,
-        snippet: snippet(messageBody, 120)
-    })
     const payload = buildResponsesPayload(historyMessages, messageBody, aiConfig)
-    const response = await openai.responses.create({
-        model: aiConfig.model,
-        input: payload,
-        temperature: aiConfig.temperature,
-        max_output_tokens: aiConfig.max_tokens
+    const modelCandidates = buildModelCandidates(aiConfig)
+
+    return await attemptModelSequence(modelCandidates, async (candidateModel) => {
+        log("generateOpenAIResponse (Responses mode)", {
+            remoteJid,
+            model: candidateModel,
+            historyLength: historyMessages.length,
+            snippet: snippet(messageBody, 120)
+        })
+        const response = await openai.responses.create({
+            model: candidateModel,
+            input: payload,
+            temperature: aiConfig.temperature,
+            max_output_tokens: aiConfig.max_tokens
+        })
+
+        const text = collectResponseText(response)
+        if (!text) {
+            throw new Error("Resposta inválida da OpenAI Responses API")
+        }
+
+        return { text }
     })
+}
 
-    const text = collectResponseText(response)
-    if (!text) {
-        throw new Error("Resposta inválida da OpenAI Responses API")
+async function generateOpenRouterResponse(aiConfig, remoteJid, messageBody) {
+    if (!aiConfig.openrouter_api_key) {
+        throw new Error("Chave OpenRouter não configurada")
     }
+    const historyMessages = await fetchHistoryRows(remoteJid, aiConfig.history_limit)
+    const payload = buildResponsesPayload(historyMessages, messageBody, aiConfig)
+    const rawBaseUrl = (aiConfig.openrouter_base_url || "").trim()
+    const normalizedBase = rawBaseUrl.replace(/\/+$/, "") || DEFAULT_OPENROUTER_BASE_URL
+    const endpoint = `${normalizedBase}/api/v1/chat/completions`
+    const modelCandidates = buildModelCandidates(aiConfig)
 
-    return { text }
+    return await attemptModelSequence(modelCandidates, async (candidateModel) => {
+        log("generateOpenRouterResponse", {
+            remoteJid,
+            model: candidateModel,
+            historyLength: historyMessages.length,
+            snippet: snippet(messageBody, 120)
+        })
+        const response = await fetch(endpoint, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${aiConfig.openrouter_api_key}`
+            },
+            body: JSON.stringify({
+                model: candidateModel,
+                messages: payload,
+                temperature: aiConfig.temperature,
+                max_output_tokens: aiConfig.max_tokens
+            })
+        })
+        const rawText = await response.text()
+        let parsed = null
+        try {
+            parsed = rawText ? JSON.parse(rawText) : null
+        } catch (err) {
+            parsed = rawText ? { text: rawText } : null
+        }
+
+        if (!response.ok) {
+            const detail = parsed?.error?.message || parsed?.error || parsed?.message || response.statusText || rawText || "Erro no OpenRouter"
+            throw new Error(`OpenRouter erro ${response.status}: ${detail}`)
+        }
+
+        const text = extractOpenRouterText(parsed)
+        if (!text) {
+            throw new Error("OpenRouter não retornou texto válido")
+        }
+
+        return { text }
+    })
 }
 
 function buildGeminiConversationParts(historyRows, userMessage) {
@@ -3402,15 +3577,22 @@ async function generateGeminiResponse(aiConfig, remoteJid, messageBody) {
     const trimmedMessage = (messageBody || "").trim()
     const parts = buildGeminiConversationParts(historyRows, trimmedMessage)
 
-    log("generateGeminiResponse", {
-        remoteJid,
-        model: aiConfig.model || "gemini-2.5-flash",
-        historyLength: historyRows.length,
-        parts: parts.length
-    })
+    const modelCandidates = buildModelCandidates(aiConfig)
 
-    const text = await callGeminiContent(aiConfig, parts)
-    return { text }
+    return await attemptModelSequence(modelCandidates, async (candidateModel) => {
+        log("generateGeminiResponse", {
+            remoteJid,
+            model: candidateModel,
+            historyLength: historyRows.length,
+            parts: parts.length
+        })
+        const enrichedConfig = { ...aiConfig, model: candidateModel }
+        const text = await callGeminiContent(enrichedConfig, parts)
+        if (!text) {
+            throw new Error("Gemini retornou resposta vazia")
+        }
+        return { text }
+    })
 }
 
 async function generateGeminiMultimodalResponse(aiConfig, remoteJid, prompt, filePaths = []) {
@@ -3439,16 +3621,22 @@ async function generateGeminiMultimodalResponse(aiConfig, remoteJid, prompt, fil
         parts.push(fileToGenerativePart(filePath))
     }
 
-    log("generateGeminiMultimodalResponse", {
-        remoteJid,
-        fileCount: filePaths.length,
-        model: aiConfig.model || "gemini-2.5-flash",
-        historyLength: historyRows.length,
-        parts: parts.length
+    const modelCandidates = buildModelCandidates(aiConfig)
+    return await attemptModelSequence(modelCandidates, async (candidateModel) => {
+        log("generateGeminiMultimodalResponse", {
+            remoteJid,
+            fileCount: filePaths.length,
+            model: candidateModel,
+            historyLength: historyRows.length,
+            parts: parts.length
+        })
+        const enrichedConfig = { ...aiConfig, model: candidateModel }
+        const text = await callGeminiContent(enrichedConfig, parts)
+        if (!text) {
+            throw new Error("Gemini retornou resposta vazia")
+        }
+        return { text }
     })
-
-    const text = await callGeminiContent(aiConfig, parts)
-    return { text }
 }
 
 async function handleMultimodalMedia(remoteJid, aiConfig, mediaEntries, promptText) {
@@ -3561,17 +3749,24 @@ async function generateAIResponse(remoteJid, messageBody, providedConfig = null)
     const injectedContext = await buildInjectedPromptContext(remoteJid)
     const enrichedConfig = { ...aiConfig, injected_context: injectedContext }
 
+    const normalizedProvider = (enrichedConfig.provider || DEFAULT_PROVIDER).toLowerCase()
+    enrichedConfig.provider = normalizedProvider
     log("generateAIResponse", {
         remoteJid,
-        provider: enrichedConfig.provider,
+        provider: normalizedProvider,
         model: enrichedConfig.model,
         historyLimit: enrichedConfig.history_limit,
         snippet: snippet(messageBody, 120)
     })
 
-    if (enrichedConfig.provider === "gemini") {
+    if (normalizedProvider === "gemini") {
         const response = await generateGeminiResponse(enrichedConfig, remoteJid, messageBody)
         return { ...response, provider: "gemini" }
+    }
+
+    if (normalizedProvider === "openrouter") {
+        const response = await generateOpenRouterResponse(enrichedConfig, remoteJid, messageBody)
+        return { ...response, provider: "openrouter" }
     }
 
     const response = await generateOpenAIResponse(enrichedConfig, remoteJid, messageBody)
@@ -4443,9 +4638,11 @@ async function loadAIConfig() {
     const multiInputDelay = storedDelay !== null ? storedDelay : getInstanceFallbackMultiInputDelay()
 
     return {
-        enabled: settings.ai_enabled === "true",
+        enabled: settings.ai_enabled === "true" || settings.ai_enabled === "1",
         provider: settings.ai_provider || DEFAULT_PROVIDER,
         model: settings.ai_model || "gpt-4.1-mini",
+        model_fallback_1: settings.ai_model_fallback_1 || "",
+        model_fallback_2: settings.ai_model_fallback_2 || "",
         system_prompt: settings.ai_system_prompt || "",
         assistant_prompt: settings.ai_assistant_prompt || "",
         assistant_id: settings.ai_assistant_id || "",
@@ -4457,6 +4654,8 @@ async function loadAIConfig() {
         openai_mode: settings.openai_mode || "responses",
         gemini_api_key: settings.gemini_api_key || "",
         gemini_instruction: settings.gemini_instruction || "",
+        openrouter_api_key: settings.openrouter_api_key || "",
+        openrouter_base_url: (settings.openrouter_base_url || "").trim() || DEFAULT_OPENROUTER_BASE_URL,
         auto_pause_enabled: settings.auto_pause_enabled === "true",
         auto_pause_minutes: Math.max(1, toNumber(settings.auto_pause_minutes, 5)),
         meta_access_token: settings.meta_access_token || "",
@@ -4560,6 +4759,10 @@ async function persistAIConfig(payload) {
         openai_mode,
         gemini_api_key,
         gemini_instruction,
+        model_fallback_1,
+        model_fallback_2,
+        openrouter_api_key,
+        openrouter_base_url,
         multi_input_delay,
         meta_access_token,
         meta_phone_number_id
@@ -4569,6 +4772,9 @@ async function persistAIConfig(payload) {
     const tempo = toNumber(temperature, DEFAULT_TEMPERATURE)
     const maxTokens = Math.max(64, toNumber(max_tokens, DEFAULT_MAX_TOKENS))
     const delaySeconds = Math.max(0, toNumber(multi_input_delay, DEFAULT_MULTI_INPUT_DELAY))
+    const sanitizedFallback1 = (model_fallback_1 || "").trim()
+    const sanitizedFallback2 = (model_fallback_2 || "").trim()
+    const sanitizedOpenRouterBaseUrl = (openrouter_base_url || "").trim()
 
         const entries = [
             ["ai_enabled", enabled ? "true" : "false"],
@@ -4584,6 +4790,10 @@ async function persistAIConfig(payload) {
             ["openai_mode", openai_mode || "responses"],
         ["gemini_api_key", gemini_api_key || ""],
         ["gemini_instruction", gemini_instruction || ""],
+        ["ai_model_fallback_1", sanitizedFallback1],
+        ["ai_model_fallback_2", sanitizedFallback2],
+        ["openrouter_api_key", openrouter_api_key || ""],
+        ["openrouter_base_url", sanitizedOpenRouterBaseUrl],
         ["ai_multi_input_delay", String(delaySeconds)],
         ["meta_access_token", meta_access_token || ""],
         ["meta_phone_number_id", meta_phone_number_id || ""]
@@ -6496,6 +6706,46 @@ app.post("/api/ai-config", async (req, res) => {
     }
 })
 
+app.post("/api/instance", (req, res) => {
+    try {
+        const payload = req.body || {}
+        const requestedInstanceId = typeof req.query.instance === "string" && req.query.instance.trim()
+            ? req.query.instance.trim()
+            : INSTANCE_ID
+
+        if (requestedInstanceId !== INSTANCE_ID) {
+            return res.status(400).json({ ok: false, error: "Instância inválida para este processo" })
+        }
+
+        const updates = {}
+        const allowedFields = ["name", "base_url", "port", "api_key", "phone"]
+        allowedFields.forEach(field => {
+            if (Object.prototype.hasOwnProperty.call(payload, field)) {
+                let value = payload[field]
+                if (field === "name" || field === "base_url") {
+                    value = typeof value === "string" ? value.trim() : value
+                }
+                if (field === "port" && value !== null && value !== undefined) {
+                    value = Number(value) || null
+                }
+                updates[field] = value
+            }
+        })
+
+        if (Object.keys(updates).length === 0) {
+            return res.status(400).json({ ok: false, error: "Nenhum campo informado para atualização" })
+        }
+
+        instanceConfig = { ...instanceConfig, ...updates }
+        persistInstanceData(updates)
+
+        res.json({ ok: true, updates })
+    } catch (err) {
+        log("Error syncing instance metadata:", err.message)
+        res.status(500).json({ ok: false, error: "Não foi possível atualizar a instância", detail: err.message })
+    }
+})
+
 app.post("/api/ai-test", async (req, res) => {
     try {
         const { message, remote_jid } = req.body || {}
@@ -6507,7 +6757,12 @@ app.post("/api/ai-test", async (req, res) => {
             ? remote_jid.trim()
             : `test-${INSTANCE_ID}`
 
-        const aiResponse = await generateAIResponse(targetJid, message.trim())
+        // Load AI config without checking enabled status for test purposes
+        const aiConfig = await loadAIConfig()
+        // Force enable AI for testing
+        const testConfig = { ...aiConfig, enabled: true }
+        
+        const aiResponse = await generateAIResponse(targetJid, message.trim(), testConfig)
         res.json({
             ok: true,
             provider: aiResponse.provider,
@@ -6612,4 +6867,3 @@ process.on("unhandledRejection", err => {
 process.on("uncaughtException", err => {
     log("Uncaught Exception:", err)
 })
-

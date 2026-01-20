@@ -10,10 +10,10 @@
   },
   "dependencies": {
     "@google/genai": "^1.33.0",
-    "@whiskeysockets/baileys": "^7.0.0-rc.8",
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "body-parser": "^1.20.3",
-    "express": "^4.21.2",
     "dotenv": "^16.4.5",
+    "express": "^4.21.2",
     "googleapis": "^137.0.0",
     "mime-types": "^3.0.2",
     "minimist": "^1.2.8",

@@ -7,6 +7,8 @@ const INSTANCE_AI_SETTING_KEYS = [
     'openai_api_key',
     'openai_mode',
     'ai_model',
+    'ai_model_fallback_1',
+    'ai_model_fallback_2',
     'ai_system_prompt',
     'ai_assistant_prompt',
     'ai_assistant_id',
@@ -15,7 +17,14 @@ const INSTANCE_AI_SETTING_KEYS = [
     'ai_max_tokens',
     'gemini_api_key',
     'gemini_instruction',
-    'ai_multi_input_delay'
+    'openrouter_api_key',
+    'openrouter_base_url',
+    'ai_multi_input_delay',
+    'meta_access_token',
+    'meta_business_account_id',
+    'meta_telephone_id',
+    'auto_pause_enabled',
+    'auto_pause_minutes'
 ];
 
 const INSTANCE_AUDIO_TRANSCRIPTION_SETTING_KEYS = [
@@ -155,11 +164,15 @@ function buildAiMetadata(array $settings): array
     $temperature = is_numeric($settings['ai_temperature']) ? (float)$settings['ai_temperature'] : 0.3;
     $maxTokens = max(64, (int)($settings['ai_max_tokens'] ?? 600));
     $delay = max(0, (int)($settings['ai_multi_input_delay'] ?? 0));
+    $autoPauseEnabled = isset($settings['auto_pause_enabled']) && (strtolower($settings['auto_pause_enabled']) === 'true' || $settings['auto_pause_enabled'] === '1');
+    $autoPauseMinutes = max(1, (int)($settings['auto_pause_minutes'] ?? 5));
 
     return [
         'enabled' => $enabled,
         'provider' => $settings['ai_provider'] ?? 'openai',
         'model' => $settings['ai_model'] ?? 'gpt-4.1-mini',
+        'model_fallback_1' => $settings['ai_model_fallback_1'] ?? '',
+        'model_fallback_2' => $settings['ai_model_fallback_2'] ?? '',
         'system_prompt' => $settings['ai_system_prompt'] ?? '',
         'assistant_prompt' => $settings['ai_assistant_prompt'] ?? '',
         'assistant_id' => $settings['ai_assistant_id'] ?? '',
@@ -170,7 +183,14 @@ function buildAiMetadata(array $settings): array
         'openai_api_key' => $settings['openai_api_key'] ?? '',
         'openai_mode' => $settings['openai_mode'] ?? 'responses',
         'gemini_api_key' => $settings['gemini_api_key'] ?? '',
-        'gemini_instruction' => $settings['gemini_instruction'] ?? ''
+        'gemini_instruction' => $settings['gemini_instruction'] ?? '',
+        'openrouter_api_key' => $settings['openrouter_api_key'] ?? '',
+        'openrouter_base_url' => $settings['openrouter_base_url'] ?? 'https://openrouter.ai',
+        'meta_access_token' => $settings['meta_access_token'] ?? '',
+        'meta_business_account_id' => $settings['meta_business_account_id'] ?? '',
+        'meta_telephone_id' => $settings['meta_telephone_id'] ?? '',
+        'auto_pause_enabled' => $autoPauseEnabled,
+        'auto_pause_minutes' => $autoPauseMinutes
     ];
 }
 
@@ -284,13 +304,13 @@ function normalizeAlarmInterval($value, $unit = ''): int
 }
 
 const INSTANCE_META_SETTING_KEYS = [
-    'meta_phone_number_id',
     'meta_business_account_id',
     'meta_access_token',
     'meta_verify_token',
     'meta_app_secret',
     'meta_api_version',
-    'meta_status'
+    'meta_status',
+    'meta_telephone_id'
 ];
 
 function buildInstanceAlarmMetadata(array $settings): array
@@ -325,13 +345,13 @@ function fetchInstanceMetaSettings(SQLite3 $db, string $instanceId): array
 function buildInstanceMetaMetadata(array $settings): array
 {
     return [
-        'phone_number_id' => $settings['meta_phone_number_id'] ?? null,
         'business_account_id' => $settings['meta_business_account_id'] ?? null,
         'access_token' => $settings['meta_access_token'] ?? null,
         'verify_token' => $settings['meta_verify_token'] ?? null,
         'app_secret' => $settings['meta_app_secret'] ?? null,
         'api_version' => $settings['meta_api_version'] ?? 'v22.0',
-        'status' => $settings['meta_status'] ?? null
+        'status' => $settings['meta_status'] ?? null,
+        'telephone_id' => $settings['meta_telephone_id'] ?? null
     ];
 }
 
@@ -440,7 +460,7 @@ function loadInstancesFromDatabase(): array
     }
 
     $stmt = $db->prepare("
-        SELECT instance_id, name, port, api_key, status, connection_status, base_url, phone, created_at, updated_at
+        SELECT instance_id, name, port, api_key, status, connection_status, base_url, phone, integration_type, created_at, updated_at
         FROM instances
         ORDER BY created_at ASC
     ");
@@ -488,7 +508,7 @@ function loadInstanceRecordFromDatabase(string $instanceId): ?array
     }
 
     $stmt = $db->prepare("
-        SELECT instance_id, name, port, api_key, status, connection_status, base_url, phone, created_at, updated_at
+        SELECT instance_id, name, port, api_key, status, connection_status, base_url, phone, integration_type, created_at, updated_at
         FROM instances
         WHERE instance_id = :id
         LIMIT 1
@@ -589,8 +609,8 @@ function upsertInstanceRecordToSql(string $instanceId, array $payload): array
     }
 
     $sql = <<<SQL
-        INSERT INTO instances (instance_id, name, port, api_key, status, connection_status, base_url, phone)
-        VALUES (:instance_id, :name, :port, :api_key, :status, :connection_status, :base_url, :phone)
+        INSERT INTO instances (instance_id, name, port, api_key, status, connection_status, base_url, phone, integration_type)
+        VALUES (:instance_id, :name, :port, :api_key, :status, :connection_status, :base_url, :phone, :integration_type)
         ON CONFLICT(instance_id) DO UPDATE SET
             name = excluded.name,
             port = excluded.port,
@@ -599,6 +619,7 @@ function upsertInstanceRecordToSql(string $instanceId, array $payload): array
             connection_status = excluded.connection_status,
             base_url = excluded.base_url,
             phone = excluded.phone,
+            integration_type = excluded.integration_type,
             updated_at = CURRENT_TIMESTAMP;
     SQL;
 
@@ -622,6 +643,11 @@ function upsertInstanceRecordToSql(string $instanceId, array $payload): array
     $stmt->bindValue(':connection_status', $payload['connection_status'] ?? null, SQLITE3_TEXT);
     $stmt->bindValue(':base_url', $baseUrl ?: null, SQLITE3_TEXT);
     $stmt->bindValue(':phone', $payload['phone'] ?? null, SQLITE3_TEXT);
+    $integrationType = trim((string)($payload['integration_type'] ?? 'baileys'));
+    if ($integrationType === '') {
+        $integrationType = 'baileys';
+    }
+    $stmt->bindValue(':integration_type', $integrationType, SQLITE3_TEXT);
 
     $exec = $stmt->execute();
     if (!$exec) {
@@ -687,9 +713,615 @@ function deleteInstanceRecordFromSql(string $instanceId): bool
     return (bool)$result;
 }
 
+function upsertMetaTemplate(string $instanceId, string $templateName, array $payload = []): array
+{
+    $result = ['ok' => false, 'message' => ''];
+    $db = openInstanceDatabase(false);
+    if (!$db) {
+        $result['message'] = 'Não foi possível abrir chat_data.db';
+        return $result;
+    }
+
+    if (!sqliteTableExists($db, 'meta_templates')) {
+        $result['message'] = 'Tabela meta_templates ausente no SQLite';
+        $db->close();
+        return $result;
+    }
+
+    $status = $payload['status'] ?? 'pending';
+    $category = $payload['category'] ?? null;
+    $language = $payload['language'] ?? 'pt_BR';
+    $components = isset($payload['components']) ? json_encode($payload['components']) : null;
+
+    $sql = <<<SQL
+        INSERT INTO meta_templates (instance_id, template_name, status, category, language, components_json, updated_at)
+        VALUES (:instance_id, :template_name, :status, :category, :language, :components_json, CURRENT_TIMESTAMP)
+        ON CONFLICT(instance_id, template_name, language) DO UPDATE SET
+            status = excluded.status,
+            category = excluded.category,
+            components_json = excluded.components_json,
+            updated_at = CURRENT_TIMESTAMP
+    SQL;
+
+    $stmt = $db->prepare($sql);
+    if (!$stmt) {
+        $result['message'] = 'Falha ao preparar instrução SQL';
+        $db->close();
+        return $result;
+    }
+
+    $stmt->bindValue(':instance_id', $instanceId, SQLITE3_TEXT);
+    $stmt->bindValue(':template_name', $templateName, SQLITE3_TEXT);
+    $stmt->bindValue(':status', $status, SQLITE3_TEXT);
+    $stmt->bindValue(':category', $category, SQLITE3_TEXT);
+    $stmt->bindValue(':language', $language, SQLITE3_TEXT);
+    $stmt->bindValue(':components_json', $components, SQLITE3_TEXT);
+
+    $exec = $stmt->execute();
+    if (!$exec) {
+        $result['message'] = 'Erro SQL: ' . $db->lastErrorMsg();
+    } else {
+        $result['ok'] = true;
+    }
+
+    $stmt->close();
+    $db->close();
+    return $result;
+}
+
+function getMetaTemplate(string $instanceId, string $templateName, string $language = 'pt_BR'): ?array
+{
+    $db = openInstanceDatabase(true);
+    if (!$db || !sqliteTableExists($db, 'meta_templates')) {
+        return null;
+    }
+
+    $stmt = $db->prepare("
+        SELECT id, instance_id, template_name, status, category, language, components_json, created_at, updated_at
+        FROM meta_templates
+        WHERE instance_id = :instance_id AND template_name = :template_name AND language = :language
+        LIMIT 1
+    ");
+
+    if (!$stmt) {
+        $db->close();
+        return null;
+    }
+
+    $stmt->bindValue(':instance_id', $instanceId, SQLITE3_TEXT);
+    $stmt->bindValue(':template_name', $templateName, SQLITE3_TEXT);
+    $stmt->bindValue(':language', $language, SQLITE3_TEXT);
+
+    $result = $stmt->execute();
+    $template = null;
+    if ($result && $row = $result->fetchArray(SQLITE3_ASSOC)) {
+        $template = $row;
+        $template['components'] = $row['components_json'] ? json_decode($row['components_json'], true) : null;
+        unset($template['components_json']);
+    }
+
+    if ($result) {
+        $result->finalize();
+    }
+    $stmt->close();
+    $db->close();
+
+    return $template;
+}
+
+function listMetaTemplates(string $instanceId, ?string $status = null, ?string $language = null): array
+{
+    $db = openInstanceDatabase(true);
+    if (!$db || !sqliteTableExists($db, 'meta_templates')) {
+        return [];
+    }
+
+    $filters = ['instance_id = :instance_id'];
+    $params = [':instance_id' => $instanceId];
+
+    if ($status !== null) {
+        $filters[] = 'status = :status';
+        $params[':status'] = $status;
+    }
+
+    if ($language !== null) {
+        $filters[] = 'language = :language';
+        $params[':language'] = $language;
+    }
+
+    $whereClause = implode(' AND ', $filters);
+    $sql = "
+        SELECT id, instance_id, template_name, status, category, language, components_json, created_at, updated_at
+        FROM meta_templates
+        WHERE $whereClause
+        ORDER BY template_name ASC, language ASC
+    ";
+
+    $stmt = $db->prepare($sql);
+    if (!$stmt) {
+        $db->close();
+        return [];
+    }
+
+    foreach ($params as $key => $value) {
+        $stmt->bindValue($key, $value, SQLITE3_TEXT);
+    }
+
+    $result = $stmt->execute();
+    $templates = [];
+    if ($result) {
+        while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+            $template = $row;
+            $template['components'] = $row['components_json'] ? json_decode($row['components_json'], true) : null;
+            unset($template['components_json']);
+            $templates[] = $template;
+        }
+        $result->finalize();
+    }
+
+    $stmt->close();
+    $db->close();
+
+    return $templates;
+}
+
+function deleteMetaTemplate(string $instanceId, string $templateName, string $language = 'pt_BR'): array
+{
+    $result = ['ok' => false, 'message' => ''];
+    $db = openInstanceDatabase(false);
+    if (!$db) {
+        $result['message'] = 'Não foi possível abrir chat_data.db';
+        return $result;
+    }
+
+    if (!sqliteTableExists($db, 'meta_templates')) {
+        $result['message'] = 'Tabela meta_templates ausente no SQLite';
+        $db->close();
+        return $result;
+    }
+
+    $stmt = $db->prepare("
+        DELETE FROM meta_templates
+        WHERE instance_id = :instance_id AND template_name = :template_name AND language = :language
+    ");
+
+    if (!$stmt) {
+        $result['message'] = 'Falha ao preparar instrução SQL';
+        $db->close();
+        return $result;
+    }
+
+    $stmt->bindValue(':instance_id', $instanceId, SQLITE3_TEXT);
+    $stmt->bindValue(':template_name', $templateName, SQLITE3_TEXT);
+    $stmt->bindValue(':language', $language, SQLITE3_TEXT);
+
+    $exec = $stmt->execute();
+    if (!$exec) {
+        $result['message'] = 'Erro SQL: ' . $db->lastErrorMsg();
+    } else {
+        $result['ok'] = true;
+    }
+
+    $stmt->close();
+    $db->close();
+    return $result;
+}
+
 function logDebug(string $message): void
 {
     if (function_exists('debug_log')) {
         debug_log($message);
     }
+}
+
+// Meta API Template Status Functions
+
+function checkMetaTemplateStatus(string $instanceId, string $templateName, string $language = 'pt_BR'): array
+{
+    $result = [
+        'ok' => false,
+        'status' => null,
+        'error' => '',
+        'api_response' => null
+    ];
+
+    $instance = loadInstanceRecordFromDatabase($instanceId);
+    if (!$instance) {
+        $result['error'] = 'Instance not found';
+        return $result;
+    }
+
+    $metaSettings = $instance['meta'] ?? [];
+    $accessToken = $metaSettings['access_token'] ?? null;
+    $businessAccountId = $metaSettings['business_account_id'] ?? null;
+    $apiVersion = $metaSettings['api_version'] ?? 'v22.0';
+
+    if (!$accessToken || !$businessAccountId) {
+        $result['error'] = 'Meta API credentials not configured';
+        return $result;
+    }
+
+    $url = "https://graph.facebook.com/{$apiVersion}/{$businessAccountId}/message_templates";
+    $params = [
+        'access_token' => $accessToken,
+        'name' => $templateName
+    ];
+
+    $queryString = http_build_query($params);
+    $fullUrl = $url . '?' . $queryString;
+
+    $ch = curl_init($fullUrl);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json'
+    ]);
+
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
+    curl_close($ch);
+
+    if ($curlError) {
+        $result['error'] = "CURL error: {$curlError}";
+        return $result;
+    }
+
+    $decoded = json_decode($response, true);
+    if ($httpCode >= 400) {
+        $errorMessage = $decoded['error']['message'] ?? "HTTP {$httpCode}";
+        $result['error'] = "Meta API error: {$errorMessage}";
+        $result['api_response'] = $decoded;
+        return $result;
+    }
+
+    if (!is_array($decoded) || !isset($decoded['data'])) {
+        $result['error'] = 'Invalid Meta API response format';
+        $result['api_response'] = $decoded;
+        return $result;
+    }
+
+    // Find the template in the response
+    $templateData = null;
+    foreach ($decoded['data'] as $template) {
+        if (isset($template['name']) && $template['name'] === $templateName) {
+            $templateData = $template;
+            break;
+        }
+    }
+
+    if (!$templateData) {
+        $result['error'] = 'Template not found in Meta API response';
+        $result['api_response'] = $decoded;
+        return $result;
+    }
+
+    $status = $templateData['status'] ?? null;
+    if (!$status) {
+        $result['error'] = 'Template status not available in response';
+        $result['api_response'] = $decoded;
+        return $result;
+    }
+
+    $result['ok'] = true;
+    $result['status'] = strtoupper($status);
+    $result['api_response'] = $templateData;
+
+    return $result;
+}
+
+function updateMetaTemplateStatus(string $instanceId, string $templateName, string $language = 'pt_BR'): array
+{
+    $result = [
+        'ok' => false,
+        'status' => null,
+        'updated' => false,
+        'error' => ''
+    ];
+
+    $statusCheck = checkMetaTemplateStatus($instanceId, $templateName, $language);
+    if (!$statusCheck['ok']) {
+        $result['error'] = $statusCheck['error'];
+        return $result;
+    }
+
+    $newStatus = $statusCheck['status'];
+    $result['status'] = $newStatus;
+
+    // Get current template from database
+    $currentTemplate = getMetaTemplate($instanceId, $templateName, $language);
+    if (!$currentTemplate) {
+        $result['error'] = 'Template not found in database';
+        return $result;
+    }
+
+    $currentStatus = $currentTemplate['status'] ?? 'pending';
+
+    // Only update if status has changed
+    if ($currentStatus === $newStatus) {
+        $result['ok'] = true;
+        $result['updated'] = false;
+        return $result;
+    }
+
+    // Update the template status in database
+    $updateResult = upsertMetaTemplate($instanceId, $templateName, [
+        'status' => $newStatus,
+        'category' => $statusCheck['api_response']['category'] ?? $currentTemplate['category'],
+        'language' => $language,
+        'components' => $statusCheck['api_response']['components'] ?? $currentTemplate['components']
+    ]);
+
+    if (!$updateResult['ok']) {
+        $result['error'] = $updateResult['message'];
+        return $result;
+    }
+
+    $result['ok'] = true;
+    $result['updated'] = true;
+
+    return $result;
+}
+
+function checkAllMetaTemplateStatuses(string $instanceId): array
+{
+    $result = [
+        'ok' => false,
+        'checked' => 0,
+        'updated' => 0,
+        'errors' => [],
+        'templates' => []
+    ];
+
+    $templates = listMetaTemplates($instanceId);
+    if (empty($templates)) {
+        $result['ok'] = true;
+        return $result;
+    }
+
+    $checked = 0;
+    $updated = 0;
+    $errors = [];
+
+    foreach ($templates as $template) {
+        $templateName = $template['template_name'];
+        $language = $template['language'] ?? 'pt_BR';
+
+        $updateResult = updateMetaTemplateStatus($instanceId, $templateName, $language);
+        $checked++;
+
+        if (!$updateResult['ok']) {
+            $errors[] = [
+                'template' => $templateName,
+                'language' => $language,
+                'error' => $updateResult['error']
+            ];
+            continue;
+        }
+
+        if ($updateResult['updated']) {
+            $updated++;
+        }
+
+        $result['templates'][] = [
+            'name' => $templateName,
+            'language' => $language,
+            'status' => $updateResult['status'],
+            'updated' => $updateResult['updated']
+        ];
+    }
+
+    $result['ok'] = true;
+    $result['checked'] = $checked;
+    $result['updated'] = $updated;
+    $result['errors'] = $errors;
+
+    return $result;
+}
+
+function scheduleMetaTemplateStatusCheck(string $instanceId): void
+{
+    // This function can be called by a cron job or scheduled task
+    // For now, we'll implement it as a simple check
+    $result = checkAllMetaTemplateStatuses($instanceId);
+
+    $logMessage = sprintf(
+        'Meta template status check for instance %s: checked=%d, updated=%d, errors=%d',
+        $instanceId,
+        $result['checked'],
+        $result['updated'],
+        count($result['errors'])
+    );
+
+    logDebug($logMessage);
+
+    if (!empty($result['errors'])) {
+        foreach ($result['errors'] as $error) {
+            logDebug(sprintf(
+                'Template check error for %s (%s): %s',
+                $error['template'],
+                $error['language'],
+                $error['error']
+            ));
+        }
+    }
+}
+
+// Meta API Template Sending Functions
+
+function sendMetaTemplate(string $instanceId, string $templateName, string $to, array $variables = [], string $language = 'pt_BR'): array
+{
+    $result = [
+        'ok' => false,
+        'message_id' => null,
+        'error' => '',
+        'api_response' => null
+    ];
+
+    $instance = loadInstanceRecordFromDatabase($instanceId);
+    if (!$instance) {
+        $result['error'] = 'Instance not found';
+        return $result;
+    }
+
+    $metaSettings = $instance['meta'] ?? [];
+    $accessToken = $metaSettings['access_token'] ?? null;
+    $phoneNumberId = $metaSettings['telephone_id'] ?? null;
+    $apiVersion = $metaSettings['api_version'] ?? 'v22.0';
+
+    if (!$accessToken || !$phoneNumberId) {
+        $result['error'] = 'Meta API credentials not configured';
+        return $result;
+    }
+
+    // Get template details from database
+    $template = getMetaTemplate($instanceId, $templateName, $language);
+    if (!$template) {
+        $result['error'] = 'Template not found in database';
+        return $result;
+    }
+
+    if ($template['status'] !== 'APPROVED') {
+        $result['error'] = 'Template is not approved for sending';
+        return $result;
+    }
+
+    // Build the template payload
+    $templatePayload = [
+        'name' => $templateName,
+        'language' => [
+            'code' => $language
+        ]
+    ];
+
+    // Add components if variables are provided
+    $components = $template['components'] ?? [];
+    if (!empty($variables) && !empty($components)) {
+        $templateComponents = [];
+
+        foreach ($components as $component) {
+            if (isset($component['type']) && $component['type'] === 'BODY') {
+                $bodyComponent = [
+                    'type' => 'body',
+                    'parameters' => []
+                ];
+
+                // Map variables to body parameters
+                $varIndex = 0;
+                foreach ($variables as $variable) {
+                    if ($varIndex < count($variables)) {
+                        $bodyComponent['parameters'][] = [
+                            'type' => 'text',
+                            'text' => (string)$variable
+                        ];
+                        $varIndex++;
+                    }
+                }
+
+                $templateComponents[] = $bodyComponent;
+            }
+        }
+
+        if (!empty($templateComponents)) {
+            $templatePayload['components'] = $templateComponents;
+        }
+    }
+
+    // Build the full message payload
+    $payload = [
+        'messaging_product' => 'whatsapp',
+        'to' => $to,
+        'type' => 'template',
+        'template' => $templatePayload
+    ];
+
+    $url = "https://graph.facebook.com/{$apiVersion}/{$phoneNumberId}/messages";
+
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'Authorization: Bearer ' . $accessToken
+    ]);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
+    curl_close($ch);
+
+    if ($curlError) {
+        $result['error'] = "CURL error: {$curlError}";
+        return $result;
+    }
+
+    $decoded = json_decode($response, true);
+    if ($httpCode >= 400) {
+        $errorMessage = $decoded['error']['message'] ?? "HTTP {$httpCode}";
+        $result['error'] = "Meta API error: {$errorMessage}";
+        $result['api_response'] = $decoded;
+        return $result;
+    }
+
+    if (!is_array($decoded) || !isset($decoded['messages'])) {
+        $result['error'] = 'Invalid Meta API response format';
+        $result['api_response'] = $decoded;
+        return $result;
+    }
+
+    $message = $decoded['messages'][0] ?? null;
+    if (!$message || !isset($message['id'])) {
+        $result['error'] = 'Message ID not found in response';
+        $result['api_response'] = $decoded;
+        return $result;
+    }
+
+    $result['ok'] = true;
+    $result['message_id'] = $message['id'];
+    $result['api_response'] = $decoded;
+
+    return $result;
+}
+
+function sendMetaTemplateBulk(string $instanceId, string $templateName, array $recipients, array $variables = [], string $language = 'pt_BR'): array
+{
+    $result = [
+        'ok' => true,
+        'total' => count($recipients),
+        'sent' => 0,
+        'failed' => 0,
+        'results' => [],
+        'errors' => []
+    ];
+
+    foreach ($recipients as $recipient) {
+        $sendResult = sendMetaTemplate($instanceId, $templateName, $recipient, $variables, $language);
+
+        if ($sendResult['ok']) {
+            $result['sent']++;
+            $result['results'][] = [
+                'recipient' => $recipient,
+                'message_id' => $sendResult['message_id'],
+                'status' => 'sent'
+            ];
+        } else {
+            $result['failed']++;
+            $result['errors'][] = [
+                'recipient' => $recipient,
+                'error' => $sendResult['error']
+            ];
+            $result['results'][] = [
+                'recipient' => $recipient,
+                'status' => 'failed',
+                'error' => $sendResult['error']
+            ];
+        }
+
+        // Add small delay between sends to avoid rate limiting
+        usleep(100000); // 0.1 seconds
+    }
+
+    return $result;
 }

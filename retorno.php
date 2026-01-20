@@ -20,6 +20,38 @@ debug_log('Raw input: ' . substr($input, 0, 500) . '...');
 
 $data = json_decode($input, true);
 
+// Signature verification for POST requests
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (is_array($data) && isset($data['entry'][0]['changes'][0]['value']['metadata']['phone_number_id'])) {
+        $phoneNumberId = $data['entry'][0]['changes'][0]['value']['metadata']['phone_number_id'];
+        $instance = findInstanceByTelephoneId($phoneNumberId);
+        $appSecret = $instance ? ($instance['meta']['app_secret'] ?? null) : null;
+
+        if ($appSecret) {
+            $signature = $_SERVER['HTTP_X_HUB_SIGNATURE_256'] ?? '';
+            if (strpos($signature, 'sha256=') === 0) {
+                $expectedSignature = 'sha256=' . hash_hmac('sha256', $input, $appSecret);
+                if (!hash_equals($signature, $expectedSignature)) {
+                    debug_log('Signature verification failed');
+                    http_response_code(401);
+                    echo json_encode(['error' => 'Invalid signature']);
+                    exit;
+                }
+            } else {
+                debug_log('Missing or invalid signature header');
+                http_response_code(401);
+                echo json_encode(['error' => 'Missing signature']);
+                exit;
+            }
+        } else {
+            debug_log('App secret not found for instance');
+            http_response_code(500);
+            echo json_encode(['error' => 'Configuration error']);
+            exit;
+        }
+    }
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     debug_log('GET request - verification mode');
     
@@ -93,7 +125,11 @@ try {
                 case 'message_reactions':
                     handleReactions($value['reactions'] ?? [], $metadata);
                     break;
-                    
+
+                case 'statuses':
+                    handleStatuses($value['statuses'] ?? [], $metadata);
+                    break;
+
                 default:
                     debug_log("Unknown field: " . $field);
                     break;
@@ -111,20 +147,43 @@ try {
 }
 
 function handleMessages($messages, $metadata) {
+    $phoneNumberId = $metadata['phone_number_id'] ?? '';
+    $displayPhoneNumber = $metadata['display_phone_number'] ?? '';
+    $instance = findInstanceByTelephoneId($displayPhoneNumber);
+    $accessToken = $instance ? ($instance['meta']['access_token'] ?? null) : null;
+    $instanceId = $instance ? $instance['instance_id'] : null;
+
     foreach ($messages as $message) {
         $from = $message['from'] ?? '';
         $id = $message['id'] ?? '';
         $type = $message['type'] ?? '';
-        $timestamp = isset($message['timestamp']) 
-            ? date('Y-m-d H:i:s', $message['timestamp']) 
+        $timestamp = isset($message['timestamp'])
+            ? date('Y-m-d H:i:s', $message['timestamp'])
             : date('Y-m-d H:i:s');
-            
+
         debug_log("Message from: $from, type: $type, id: $id, time: $timestamp");
-        
+
         switch ($type) {
             case 'text':
                 $body = $message['text']['body'] ?? '';
                 debug_log("Text message: " . $body);
+
+                $lastTimestamp = getLastCustomerMessageTimestamp($from);
+                $within24h = isWithin24Hours($lastTimestamp);
+
+                if (!$within24h) {
+                    debug_log("Message outside 24h window, rejecting free-text");
+                    // Send rejection message with template options
+                    if ($accessToken && $instanceId) {
+                        $templateList = getApprovedTemplates($instanceId);
+                        $rejectionMessage = "Mensagens depois de 24hs do envio do cliente não são aceitas. Por favor, só envie mensagens até 24hs do contato do cliente, ou então use a função para enviar as mensagens pré-aprovadas abaixo:\n\n" . implode("\n", $templateList);
+                        sendTextMessage($phoneNumberId, $accessToken, $from, $rejectionMessage);
+                        debug_log("Sent rejection message with templates");
+                    }
+                } else {
+                    debug_log("Message within 24h window, processing normally");
+                }
+
                 saveMessage($from, $id, $type, $body, $timestamp, $metadata);
                 break;
                 
@@ -197,21 +256,123 @@ function handleReactions($reactions, $metadata) {
     foreach ($reactions as $reaction) {
         $messageId = $reaction['message_id'] ?? '';
         $emoji = $reaction['emoji'] ?? '';
-        $timestamp = isset($reaction['timestamp']) 
-            ? date('Y-m-d H:i:s', $reaction['timestamp']) 
+        $timestamp = isset($reaction['timestamp'])
+            ? date('Y-m-d H:i:s', $reaction['timestamp'])
             : date('Y-m-d H:i:s');
         $from = $reaction['from'] ?? '';
-        
+
         debug_log("Reaction: Message ID=$messageId, Emoji=$emoji, From=$from, Time=$timestamp");
-        
+
         saveReaction($messageId, $emoji, $from, $timestamp, $metadata);
     }
+}
+
+function handleStatuses($statuses, $metadata) {
+    foreach ($statuses as $status) {
+        $messageId = $status['id'] ?? '';
+        $statusType = $status['status'] ?? '';
+        $timestamp = isset($status['timestamp'])
+            ? date('Y-m-d H:i:s', $status['timestamp'])
+            : date('Y-m-d H:i:s');
+        $recipientId = $status['recipient_id'] ?? '';
+
+        debug_log("Status: Message ID=$messageId, Status=$statusType, Recipient=$recipientId, Time=$timestamp");
+
+        saveStatus($messageId, $statusType, $timestamp, $recipientId, $metadata);
+    }
+}
+
+function findInstanceByTelephoneId($telephoneId) {
+    require_once __DIR__ . '/instance_data.php';
+    $instances = loadInstancesFromDatabase();
+    foreach ($instances as $instance) {
+        if (($instance['meta']['telephone_id'] ?? null) === $telephoneId) {
+            return $instance;
+        }
+    }
+    return null;
+}
+
+function getLastCustomerMessageTimestamp($fromNumber) {
+    $dbPath = __DIR__ . '/webhook_messages.db';
+    if (!file_exists($dbPath)) {
+        return null;
+    }
+    $db = new SQLite3($dbPath);
+    $stmt = $db->prepare('SELECT timestamp FROM messages WHERE from_number = :from ORDER BY timestamp DESC LIMIT 1');
+    $stmt->bindValue(':from', $fromNumber, SQLITE3_TEXT);
+    $result = $stmt->execute();
+    $timestamp = null;
+    if ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+        $timestamp = $row['timestamp'];
+    }
+    $result->finalize();
+    $stmt->close();
+    $db->close();
+    return $timestamp;
+}
+
+function isWithin24Hours($timestamp) {
+    if (!$timestamp) {
+        return false;
+    }
+    $lastTime = strtotime($timestamp);
+    $currentTime = time();
+    $diff = $currentTime - $lastTime;
+    return $diff <= 24 * 3600;
+}
+
+function sendTextMessage($phoneNumberId, $accessToken, $to, $message) {
+    $url = "https://graph.facebook.com/v22.0/{$phoneNumberId}/messages";
+    $payload = [
+        'messaging_product' => 'whatsapp',
+        'to' => $to,
+        'type' => 'text',
+        'text' => ['body' => $message]
+    ];
+
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'Authorization: Bearer ' . $accessToken
+    ]);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    return $httpCode >= 200 && $httpCode < 300;
+}
+
+function getApprovedTemplates($instanceId) {
+    require_once __DIR__ . '/instance_data.php';
+    $templates = listMetaTemplates($instanceId, 'APPROVED');
+    $templateList = [];
+    foreach ($templates as $template) {
+        $name = $template['template_name'];
+        // Try to get a sample body text
+        $body = '';
+        if (isset($template['components'])) {
+            foreach ($template['components'] as $component) {
+                if (isset($component['type']) && $component['type'] === 'BODY' && isset($component['text'])) {
+                    $body = $component['text'];
+                    break;
+                }
+            }
+        }
+        $templateList[] = "Template|{$name}|{$body}";
+    }
+    return $templateList;
 }
 
 function saveMessage($from, $id, $type, $content, $timestamp, $metadata, $caption = '', $filename = '') {
     $dbPath = __DIR__ . '/webhook_messages.db';
     $db = new SQLite3($dbPath);
-    
+
     $db->exec('CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
         from_number TEXT,
@@ -224,11 +385,11 @@ function saveMessage($from, $id, $type, $content, $timestamp, $metadata, $captio
         display_phone_number TEXT,
         created_at TEXT
     )');
-    
-    $stmt = $db->prepare('INSERT OR REPLACE INTO messages 
-        (id, from_number, type, content, caption, filename, timestamp, phone_number_id, display_phone_number, created_at) 
+
+    $stmt = $db->prepare('INSERT OR REPLACE INTO messages
+        (id, from_number, type, content, caption, filename, timestamp, phone_number_id, display_phone_number, created_at)
         VALUES (:id, :from_number, :type, :content, :caption, :filename, :timestamp, :phone_number_id, :display_phone_number, :created_at)');
-    
+
     $stmt->bindValue(':id', $id, SQLITE3_TEXT);
     $stmt->bindValue(':from_number', $from, SQLITE3_TEXT);
     $stmt->bindValue(':type', $type, SQLITE3_TEXT);
@@ -239,7 +400,7 @@ function saveMessage($from, $id, $type, $content, $timestamp, $metadata, $captio
     $stmt->bindValue(':phone_number_id', $metadata['phone_number_id'] ?? '', SQLITE3_TEXT);
     $stmt->bindValue(':display_phone_number', $metadata['display_phone_number'] ?? '', SQLITE3_TEXT);
     $stmt->bindValue(':created_at', date('Y-m-d H:i:s'), SQLITE3_TEXT);
-    
+
     $stmt->execute();
     $db->close();
 }
@@ -303,7 +464,7 @@ function saveReadStatus($messageId, $timestamp, $watermark, $metadata) {
 function saveReaction($messageId, $emoji, $from, $timestamp, $metadata) {
     $dbPath = __DIR__ . '/webhook_messages.db';
     $db = new SQLite3($dbPath);
-    
+
     $db->exec('CREATE TABLE IF NOT EXISTS reactions (
         id TEXT PRIMARY KEY,
         message_id TEXT,
@@ -314,13 +475,13 @@ function saveReaction($messageId, $emoji, $from, $timestamp, $metadata) {
         display_phone_number TEXT,
         created_at TEXT
     )');
-    
+
     $id = uniqid('reaction_', true);
-    
-    $stmt = $db->prepare('INSERT INTO reactions 
-        (id, message_id, emoji, from_number, timestamp, phone_number_id, display_phone_number, created_at) 
+
+    $stmt = $db->prepare('INSERT INTO reactions
+        (id, message_id, emoji, from_number, timestamp, phone_number_id, display_phone_number, created_at)
         VALUES (:id, :message_id, :emoji, :from_number, :timestamp, :phone_number_id, :display_phone_number, :created_at)');
-    
+
     $stmt->bindValue(':id', $id, SQLITE3_TEXT);
     $stmt->bindValue(':message_id', $messageId, SQLITE3_TEXT);
     $stmt->bindValue(':emoji', $emoji, SQLITE3_TEXT);
@@ -329,7 +490,38 @@ function saveReaction($messageId, $emoji, $from, $timestamp, $metadata) {
     $stmt->bindValue(':phone_number_id', $metadata['phone_number_id'] ?? '', SQLITE3_TEXT);
     $stmt->bindValue(':display_phone_number', $metadata['display_phone_number'] ?? '', SQLITE3_TEXT);
     $stmt->bindValue(':created_at', date('Y-m-d H:i:s'), SQLITE3_TEXT);
-    
+
+    $stmt->execute();
+    $db->close();
+}
+
+function saveStatus($messageId, $status, $timestamp, $recipientId, $metadata) {
+    $dbPath = __DIR__ . '/webhook_messages.db';
+    $db = new SQLite3($dbPath);
+
+    $db->exec('CREATE TABLE IF NOT EXISTS message_statuses (
+        message_id TEXT,
+        status TEXT,
+        timestamp TEXT,
+        recipient_id TEXT,
+        phone_number_id TEXT,
+        display_phone_number TEXT,
+        created_at TEXT,
+        PRIMARY KEY (message_id, status)
+    )');
+
+    $stmt = $db->prepare('INSERT OR REPLACE INTO message_statuses
+        (message_id, status, timestamp, recipient_id, phone_number_id, display_phone_number, created_at)
+        VALUES (:message_id, :status, :timestamp, :recipient_id, :phone_number_id, :display_phone_number, :created_at)');
+
+    $stmt->bindValue(':message_id', $messageId, SQLITE3_TEXT);
+    $stmt->bindValue(':status', $status, SQLITE3_TEXT);
+    $stmt->bindValue(':timestamp', $timestamp, SQLITE3_TEXT);
+    $stmt->bindValue(':recipient_id', $recipientId, SQLITE3_TEXT);
+    $stmt->bindValue(':phone_number_id', $metadata['phone_number_id'] ?? '', SQLITE3_TEXT);
+    $stmt->bindValue(':display_phone_number', $metadata['display_phone_number'] ?? '', SQLITE3_TEXT);
+    $stmt->bindValue(':created_at', date('Y-m-d H:i:s'), SQLITE3_TEXT);
+
     $stmt->execute();
     $db->close();
 }

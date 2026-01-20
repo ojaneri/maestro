@@ -9,6 +9,17 @@ require_once __DIR__ . '/instance_data.php';
 require_once __DIR__ . '/external_auth.php';
 date_default_timezone_set('America/Fortaleza');
 ensureExternalUsersSchema();
+
+if (!function_exists('buildPublicBaseUrl')) {
+    function buildPublicBaseUrl(string $basePath): string
+    {
+        $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+        $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+        $normalized = rtrim($basePath, '/');
+        return "{$scheme}://{$host}{$normalized}";
+    }
+}
+
 if (file_exists('debug')) {
     function debug_log($message) {
         file_put_contents('debug.log', date('Y-m-d H:i:s') . ' - ' . $message . PHP_EOL, FILE_APPEND | LOCK_EX);
@@ -201,16 +212,6 @@ function formatInstancePhoneLabel($jid) {
     }
     $label = $formatted ?: $local;
     return "{$label} @{$domain}";
-}
-
-if (!function_exists('buildPublicBaseUrl')) {
-    function buildPublicBaseUrl(string $basePath): string
-    {
-        $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-        $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
-        $normalized = rtrim($basePath, '/');
-        return "{$scheme}://{$host}{$normalized}";
-    }
 }
 
 if (isset($_GET['ajax_chats'])) {
@@ -701,7 +702,7 @@ if (isset($_GET['ajax_send']) && $_SERVER['REQUEST_METHOD'] === 'POST') {
       <div class="text-sm text-slate-500">Instância selecionada</div>
       <div class="font-semibold text-dark"><?= htmlspecialchars($instance['name'] ?? 'Nenhuma instância') ?></div>
       <?php 
-        $isMetaApi = !empty($instance['ai']['meta_access_token']) && !empty($instance['ai']['meta_phone_number_id']);
+        $isMetaApi = !empty($instance['ai']['meta_access_token']) && !empty($instance['meta']['business_account_id']);
         echo '<div class="text-xs text-slate-500">';
         echo $isMetaApi ? 'Integração: Meta API' : 'Integração: Baileys';
         echo '</div>';

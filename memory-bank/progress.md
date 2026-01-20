@@ -5,7 +5,8 @@
 - ✅ Multi-instance WhatsApp management via central dashboard
 - ✅ QR code authentication for new instances
 - ✅ Real-time chat interface with WhatsApp-style UI
-- ✅ AI-powered automated responses (OpenAI GPT and Google Gemini)
+- ✅ AI-powered automated responses (OpenAI GPT, Google Gemini, and OpenRouter with fallback sequencing)
+- ✅ Web instances inherit the same Baileys automation controls (secretária, transcrição e auto pause)
 - ✅ Multi-user system with role-based access (Admin, Manager, Operator)
 - ✅ SQLite database as single source of truth
 - ✅ Google Calendar integration for scheduling
@@ -17,8 +18,12 @@
 - ✅ File upload and media handling
 - ✅ RESTful API for external integrations
 - ✅ Meta API integration with message templates
+- ✅ Template status checking and approval management for Meta API
+- ✅ Template sending functionality with test and bulk sending capabilities
 - ✅ Conditional UI rendering for different integration types (Baileys/Meta)
 - ✅ Message status tracking (sent, delivered, read, failed) for Meta API
+- ✅ Webhook 24h window rule enforcement for free-text responses
+- ✅ Simplified Meta API configuration (removed Meta Phone Number ID field)
 
 ## What's Left to Build
 
@@ -49,6 +54,6 @@ The system is stable and suitable for production use with multiple concurrent in
 - **Database Migration**: Moved from JSON files to SQLite in v1.0 for better data consistency and concurrent access
 - **Architecture Shift**: Adopted PHP + Node.js architecture for better separation of concerns
 - **User Management**: Added multi-user support in v1.5 to enable team collaboration
-- **AI Integration**: Expanded from basic OpenAI to support multiple providers (OpenAI, Gemini)
+- **AI Integration**: Expanded from basic OpenAI to support multiple providers (OpenAI, Gemini, OpenRouter with fallback sequencing)
 - **Calendar Integration**: Added Google Calendar support for advanced scheduling features
 - **Security**: Implemented API key authentication and role-based access control

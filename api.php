@@ -284,7 +284,7 @@ if (isset($payload['action'])) {
         }
 
         $enabled = (bool)($ai['enabled'] ?? false);
-        $provider = in_array($ai['provider'] ?? 'openai', ['openai', 'gemini'], true) ? $ai['provider'] : 'openai';
+        $provider = in_array($ai['provider'] ?? 'openai', ['openai', 'gemini', 'openrouter'], true) ? $ai['provider'] : 'openai';
         $model = trim($ai['model'] ?? 'gpt-4.1-mini');
         $systemPrompt = trim($ai['system_prompt'] ?? '');
         $assistantPrompt = trim($ai['assistant_prompt'] ?? '');
@@ -299,6 +299,10 @@ if (isset($payload['action'])) {
         $openaiApiKey = trim($ai['openai_api_key'] ?? '');
         $geminiApiKey = trim($ai['gemini_api_key'] ?? '');
         $geminiInstruction = trim($ai['gemini_instruction'] ?? '');
+        $modelFallback1 = trim($ai['model_fallback_1'] ?? '');
+        $modelFallback2 = trim($ai['model_fallback_2'] ?? '');
+        $openrouterApiKey = trim($ai['openrouter_api_key'] ?? '');
+        $openrouterBaseUrl = trim($ai['openrouter_base_url'] ?? '');
 
         if ($enabled && $provider === 'openai') {
             if (!$openaiApiKey) {
@@ -320,6 +324,11 @@ if (isset($payload['action'])) {
             die(json_encode(["error" => "Gemini API key is required when enabling Gemini provider"]));
         }
 
+        if ($enabled && $provider === 'openrouter' && !$openrouterApiKey) {
+            http_response_code(400);
+            die(json_encode(["error" => "OpenRouter API key is required when enabling OpenRouter provider"]));
+        }
+
         $nodePayload = [
             'enabled' => $enabled,
             'provider' => $provider,
@@ -332,9 +341,13 @@ if (isset($payload['action'])) {
             'max_tokens' => $maxTokens,
             'multi_input_delay' => $multiInputDelay,
             'openai_api_key' => $openaiApiKey,
-            'openai_mode' => $openaiMode,
-            'gemini_api_key' => $geminiApiKey,
-            'gemini_instruction' => $geminiInstruction,
+        'openai_mode' => $openaiMode,
+        'gemini_api_key' => $geminiApiKey,
+        'gemini_instruction' => $geminiInstruction,
+        'ai_model_fallback_1' => $modelFallback1,
+        'ai_model_fallback_2' => $modelFallback2,
+        'openrouter_api_key' => $openrouterApiKey,
+        'openrouter_base_url' => $openrouterBaseUrl,
         ];
 
         $nodeUrl = "http://127.0.0.1:{$port}/api/ai-config";
@@ -528,6 +541,154 @@ if (isset($payload['action'])) {
             $responsePayload['warning'] = implode('; ', $nodeWarnings);
         }
         die(json_encode($responsePayload));
+    }
+
+    if ($payload['action'] === 'check_meta_template_status') {
+        $templateName = trim($payload['template_name'] ?? '');
+        $language = trim($payload['language'] ?? 'pt_BR');
+
+        if ($templateName === '') {
+            http_response_code(400);
+            die(json_encode(["error" => "Template name is required"]));
+        }
+
+        $result = updateMetaTemplateStatus($instanceId, $templateName, $language);
+
+        if (!$result['ok']) {
+            http_response_code(500);
+            die(json_encode(["error" => $result['error']]));
+        }
+
+        die(json_encode([
+            "success" => true,
+            "status" => $result['status'],
+            "updated" => $result['updated']
+        ]));
+    }
+
+    if ($payload['action'] === 'check_all_meta_template_statuses') {
+        $result = checkAllMetaTemplateStatuses($instanceId);
+
+        if (!$result['ok']) {
+            http_response_code(500);
+            die(json_encode(["error" => "Failed to check template statuses"]));
+        }
+
+        die(json_encode([
+            "success" => true,
+            "checked" => $result['checked'],
+            "updated" => $result['updated'],
+            "errors" => $result['errors'],
+            "templates" => $result['templates']
+        ]));
+    }
+
+    if ($payload['action'] === 'create_meta_template') {
+        $templateName = trim($payload['template_name'] ?? '');
+        $category = trim($payload['category'] ?? 'MARKETING');
+        $language = trim($payload['language'] ?? 'pt_BR');
+        $components = $payload['components'] ?? [];
+
+        if ($templateName === '') {
+            http_response_code(400);
+            die(json_encode(["error" => "Template name is required"]));
+        }
+
+        if (!is_array($components) || empty($components)) {
+            http_response_code(400);
+            die(json_encode(["error" => "Components are required"]));
+        }
+
+        // First save to local database
+        $localResult = upsertMetaTemplate($instanceId, $templateName, [
+            'status' => 'pending',
+            'category' => $category,
+            'language' => $language,
+            'components' => $components
+        ]);
+
+        if (!$localResult['ok']) {
+            http_response_code(500);
+            die(json_encode(["error" => $localResult['message']]));
+        }
+
+        // TODO: Submit to Meta API for approval
+        // For now, just return success with pending status
+
+        die(json_encode([
+            "success" => true,
+            "template_name" => $templateName,
+            "status" => "pending",
+            "message" => "Template created and submitted for approval"
+        ]));
+    }
+
+    if ($payload['action'] === 'send_meta_template') {
+        $templateName = trim($payload['template_name'] ?? '');
+        $to = trim($payload['to'] ?? '');
+        $variables = $payload['variables'] ?? [];
+        $language = trim($payload['language'] ?? 'pt_BR');
+
+        if ($templateName === '') {
+            http_response_code(400);
+            die(json_encode(["error" => "Template name is required"]));
+        }
+
+        if ($to === '') {
+            http_response_code(400);
+            die(json_encode(["error" => "Recipient phone number is required"]));
+        }
+
+        if (!is_array($variables)) {
+            $variables = [];
+        }
+
+        $result = sendMetaTemplate($instanceId, $templateName, $to, $variables, $language);
+
+        if (!$result['ok']) {
+            http_response_code(500);
+            die(json_encode(["error" => $result['error']]));
+        }
+
+        die(json_encode([
+            "success" => true,
+            "message_id" => $result['message_id'],
+            "template_name" => $templateName,
+            "recipient" => $to,
+            "message" => "Template sent successfully"
+        ]));
+    }
+
+    if ($payload['action'] === 'send_meta_template_bulk') {
+        $templateName = trim($payload['template_name'] ?? '');
+        $recipients = $payload['recipients'] ?? [];
+        $variables = $payload['variables'] ?? [];
+        $language = trim($payload['language'] ?? 'pt_BR');
+
+        if ($templateName === '') {
+            http_response_code(400);
+            die(json_encode(["error" => "Template name is required"]));
+        }
+
+        if (!is_array($recipients) || empty($recipients)) {
+            http_response_code(400);
+            die(json_encode(["error" => "Recipients list is required"]));
+        }
+
+        if (!is_array($variables)) {
+            $variables = [];
+        }
+
+        $result = sendMetaTemplateBulk($instanceId, $templateName, $recipients, $variables, $language);
+
+        die(json_encode([
+            "success" => true,
+            "total" => $result['total'],
+            "sent" => $result['sent'],
+            "failed" => $result['failed'],
+            "results" => $result['results'],
+            "errors" => $result['errors']
+        ]));
     }
 
     http_response_code(400);
