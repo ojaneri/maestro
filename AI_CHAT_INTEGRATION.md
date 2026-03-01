@@ -121,20 +121,7 @@ Add this button to your `index.php` in the header section (around line 387):
 ## ⚙️ Configuration
 
 ### OpenAI Settings
-Configure via API or dashboard:
-
-```bash
-# Save AI settings
-curl -X POST http://127.0.0.1:3000/ai-settings \
-  -H "Content-Type: application/json" \
-  -d '{
-    "enabled": true,
-    "api_key": "sk-your-openai-key",
-    "model": "gpt-3.5-turbo",
-    "system_prompt": "You are a helpful assistant...",
-    "assistant_prompt": "Respond in a friendly tone..."
-  }'
-```
+Configure via API or dashboard. See [API Documentation](../API_DOCUMENTATION.md) for examples.
 
 ### System Prompts Examples
 
@@ -159,20 +146,13 @@ Be friendly and enthusiastic about our offerings.
 node -e "const db = require('./db'); db.initDatabase().then(() => console.log('OK')).catch(console.error);"
 ```
 
-### 2. Test API Endpoints
-```bash
-# Test contacts endpoint
-curl http://127.0.0.1:3000/contacts
-
-# Test AI settings
-curl http://127.0.0.1:3000/ai-settings
-```
-
-### 3. Test Chat Interface
+### 2. Test Chat Interface
 1. Open dashboard: `/api/envio/wpp/dashboard_chat.php?instance=<id>`
 2. Send a message from WhatsApp
 3. Check if it appears in the dashboard
 4. Verify AI responds automatically
+
+> **Nota:** Para exemplos de API cURL, consulte [API Documentation](../API_DOCUMENTATION.md)
 
 ## 🔧 Troubleshooting
 
@@ -194,14 +174,7 @@ tail -f instance_*.log
 bash restart_instance.sh <instance_id>
 ```
 
-### API Issues
-```bash
-# Test server health
-curl http://127.0.0.1:3000/health
-
-# Check instance status
-curl http://127.0.0.1:3000/status
-```
+> **Nota:** Para exemplos de API cURL, consulte [API Documentation](../API_DOCUMENTATION.md)
 
 ## 📊 Database Schema
 

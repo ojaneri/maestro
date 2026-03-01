@@ -83,7 +83,7 @@ GET /qr
 
 ## 4. Enviar mensagem
 
-Envia mensagem de texto para um número WhatsApp.
+Enviar mensagem de texto ou imagem para um número WhatsApp.
 
 **Endpoint:**
 ```
@@ -94,11 +94,29 @@ POST /send-message
 ```json
 {
   "to": "558586030781",
-  "message": "Olá, teste!"
+  "message": "Olá, teste!",
+  "image_url": "https://example.com/image.jpg",
+  "image_base64": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ...",
+  "caption": "Legenda da imagem",
+  "everyone": false
 }
 ```
 
-**Resposta:**
+**Parâmetros:**
+
+- `to` (obrigatório): Número do destinatário no formato internacional (ex: "558586030781")
+- `message` (opcional): Texto da mensagem. Obrigatório se não enviar imagem.
+- `image_url` (opcional): URL da imagem a ser enviada. Deve ser uma URL HTTP/HTTPS válida.
+- `image_base64` (opcional): Imagem codificada em base64. Pode incluir o prefixo "data:image/...;base64,".
+- `caption` (opcional): Legenda da imagem. Usado apenas quando enviando imagem.
+- `everyone` (opcional): Booleano que indica se todos os participantes do grupo devem ser mencionados. Apenas funciona para chats de grupo. Valor padrão: `false`.
+
+**Notas:**
+- Pelo menos um dos parâmetros `message`, `image_url` ou `image_base64` deve ser fornecido.
+- Se `image_url` e `image_base64` forem fornecidos simultaneamente, `image_url` terá prioridade.
+- A `caption` é ignorada se não houver imagem.
+
+**Resposta de Sucesso:**
 ```json
 {
   "ok": true,
@@ -120,6 +138,19 @@ POST /send-message
   }
 }
 ```
+
+**Resposta de Erro:**
+```json
+{
+  "error": "Número não existe no WhatsApp",
+  "detail": "Falha ao enviar mensagem"
+}
+```
+
+**Códigos de Erro:**
+- `400`: Parâmetros inválidos (número inválido, formato de imagem não suportado, imagem muito grande)
+- `404`: Número não existe no WhatsApp
+- `503`: WhatsApp não conectado
 
 ## 5. Logout (desconectar e invalidar sessão)
 
@@ -249,22 +280,44 @@ ws://HOST:PORT/ws
 | `/health` | GET | Verifica se a instância está viva |
 | `/status` | GET | Mostra estado completo e erro, se houver |
 | `/qr` | GET | Obtém o QR atual (se disponível) |
-| `/send-message` | POST | Envia mensagem de texto |
+| `/send-message` | POST | Envia mensagem de texto ou imagem |
 | `/disconnect` | POST | Faz logout e pede QR |
 | `/restart` | POST | Reinicia a conexão mantendo sessão |
 | `/ws` | WS | Eventos em tempo real |
 | `/api.php` | POST | Configurações OpenAI (via painel) |
 
-## Exemplos de Uso
+## Exemplos de API (cURL)
 
-### Usando cURL - Envio de Mensagem
+### Usando cURL - Envio de Mensagem de Texto
 ```bash
-curl -X POST "http://localhost:3010/send-Message" \
-   -H "Content-Type: application/json" \
-   -d '{
-         "to": "558586030781",
-         "message": "Test message"
-       }'
+curl -X POST "http://localhost:3010/send-message" \
+    -H "Content-Type: application/json" \
+    -d '{
+          "to": "558586030781",
+          "message": "Test message"
+        }'
+```
+
+### Usando cURL - Envio de Imagem via URL
+```bash
+curl -X POST "http://localhost:3010/send-message" \
+    -H "Content-Type: application/json" \
+    -d '{
+          "to": "558586030781",
+          "image_url": "https://example.com/image.jpg",
+          "caption": "Veja esta imagem!"
+        }'
+```
+
+### Usando cURL - Envio de Imagem via Base64
+```bash
+curl -X POST "http://localhost:3010/send-message" \
+    -H "Content-Type: application/json" \
+    -d '{
+          "to": "558586030781",
+          "image_base64": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD...",
+          "caption": "Imagem em base64"
+        }'
 ```
 
 ### Usando cURL - Verificar Status
@@ -277,9 +330,9 @@ curl -X GET "http://localhost:3010/status"
 curl -X GET "http://localhost:3010/qr"
 ```
 
-### Usando JavaScript/Fetch
+### Usando JavaScript/Fetch - Texto
 ```javascript
-// Enviar mensagem
+// Enviar mensagem de texto
 fetch('http://localhost:3010/send-message', {
     method: 'POST',
     headers: {
@@ -293,6 +346,42 @@ fetch('http://localhost:3010/send-message', {
 .then(response => response.json())
 .then(data => console.log(data));
 ```
+
+### Usando JavaScript/Fetch - Imagem
+```javascript
+// Enviar imagem via URL
+fetch('http://localhost:3010/send-message', {
+    method: 'POST',
+    headers: {
+        'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+        to: '558586030781',
+        image_url: 'https://example.com/image.jpg',
+        caption: 'Imagem enviada via JavaScript'
+    })
+})
+.then(response => response.json())
+.then(data => console.log(data));
+```
+
+## 5. Especificações de Imagens
+
+### Formatos Suportados
+- JPEG (.jpg, .jpeg)
+- PNG (.png)
+- GIF (.gif)
+- WebP (.webp)
+
+### Limites de Tamanho
+- Tamanho máximo: 10 MB por imagem
+- Imagens maiores que 10 MB serão rejeitadas com erro 400
+
+### Compatibilidade Reversa
+- O endpoint continua suportando mensagens de texto puras (apenas `to` e `message`)
+- Novos parâmetros (`image_url`, `image_base64`, `caption`) são opcionais
+- Requisições existentes sem imagens funcionarão normalmente
+- A API mantém compatibilidade total com versões anteriores
 
 ## Características Técnicas
 
@@ -321,3 +410,4 @@ fetch('http://localhost:3010/send-message', {
 5. **Sessões são mantidas** entre reinicializações do servidor
 6. **OpenAI Integration** permite respostas automáticas a mensagens recebidas quando habilitado
 7. **API Key OpenAI** deve começar com "sk-" e ter pelo menos 48 caracteres
+8. **Envio de imagens** suporta JPEG, PNG, GIF e WebP até 10MB via URL ou base64
