@@ -139,6 +139,50 @@ function buildAlarmHtml(string $title, string $subtitle, array $rows, string $me
 HTML;
 }
 
+function checkInstanceHealth($instanceId, $instance): array
+{
+    $health = [
+        'instanceId' => $instanceId,
+        'name' => $instance['name'] ?? $instanceId,
+        'status' => 'healthy',
+        'checks' => [],
+        'errors' => []
+    ];
+
+    // Port check
+    if (isset($instance['port']) && $instance['port']) {
+        $port = (int)$instance['port'];
+        $isPortOpen = isPortOpenCli('127.0.0.1', $port);
+        $health['checks']['port'] = $isPortOpen ? 'pass' : 'fail';
+        if (!$isPortOpen) {
+            $health['errors'][] = "Porta {$port} não responde";
+        }
+    }
+
+    // Connection status check
+    if (isset($instance['connection_status']) && $instance['connection_status'] !== 'connected') {
+        $health['checks']['connection'] = 'fail';
+        $health['errors'][] = "Status de conexão: {$instance['connection_status']}";
+    } else {
+        $health['checks']['connection'] = 'pass';
+    }
+
+    // WhatsApp status check
+    if (isset($instance['status']) && $instance['status'] === 'error') {
+        $health['checks']['whatsapp'] = 'fail';
+        $health['errors'][] = "Status WhatsApp: {$instance['status']}";
+    } else {
+        $health['checks']['whatsapp'] = 'pass';
+    }
+
+    // Determine overall health
+    if (!empty($health['errors'])) {
+        $health['status'] = 'unhealthy';
+    }
+
+    return $health;
+}
+
 $instances = loadInstancesFromDatabase();
 if (empty($instances)) {
     echo "Nenhuma instância encontrada.\n";
@@ -154,10 +198,10 @@ foreach ($instances as $instanceId => $instance) {
         continue;
     }
 
-    $port = isset($instance['port']) ? $instance['port'] : null;
-    $isPortUp = $port !== null && $port !== false && isPortOpenCli('127.0.0.1', $port);
-    if (!$port || $isPortUp) {
-        if ($isPortUp && !empty($alarmConfig['last_sent'])) {
+    $health = checkInstanceHealth($instanceId, $instance);
+    
+    if ($health['status'] === 'healthy') {
+        if (!empty($alarmConfig['last_sent'])) {
             saveInstanceSettings($instanceId, ['alarm_server_last_sent' => '']);
             echo "Alarme de servidor resetado para {$instanceId}\n";
         }
@@ -178,8 +222,8 @@ foreach ($instances as $instanceId => $instance) {
         continue;
     }
 
-    $instanceLabel = isset($instance['name']) && $instance['name'] !== '' ? $instance['name'] : $instanceId;
-    $subject = "Maestro: instância {$instanceLabel} offline";
+    $instanceLabel = $health['name'];
+    $subject = "Maestro: instância {$instanceLabel} com problemas de saúde";
     $timestamp = date('Y-m-d H:i:s');
     $hostname = gethostname() ?: 'desconhecido';
     $phpVersion = phpversion();
@@ -188,14 +232,15 @@ foreach ($instances as $instanceId => $instance) {
     $nodeStatus = $instance['status'] ?? 'desconhecido';
     $connectionState = $instance['connection_status'] ?? 'desconhecido';
     $intervalLabel = formatIntervalMinutes($intervalMinutes);
+    
+    $errorsList = implode("\n- ", $health['errors']);
     $body = "Instância: {$instanceLabel}\n"
         . "Identificador: {$instanceId}\n"
-        . "Porta monitorada: {$port}\n"
         . "Detectado em: {$timestamp} (UTC-3)\n"
         . "Intervalo de alertas: {$intervalLabel}\n"
         . "Ambiente: {$environment}\n"
         . "PIDs e status: host={$hostname} pid={$pid}\n\n"
-        . "Motivo: a porta {$port} não respondeu ao monitoramento local.\n"
+        . "Problemas detectados:\n- {$errorsList}\n\n"
         . "Status registrado: {$nodeStatus} / {$connectionState}\n\n"
         . "Debug:\n"
         . "- PHP: {$phpVersion}\n"
@@ -207,22 +252,28 @@ foreach ($instances as $instanceId => $instance) {
     $htmlRows = [
         'Instância' => $instanceLabel,
         'Identificador' => $instanceId,
-        'Porta monitorada' => $port,
+        'Porta monitorada' => isset($instance['port']) ? $instance['port'] : 'N/A',
         'Detectado em' => $timestamp . ' (UTC-3)',
         'Intervalo de alertas' => $intervalLabel,
         'Ambiente' => $environment,
         'Host/PID' => "host={$hostname} pid={$pid}",
         'Status registrado' => "{$nodeStatus} / {$connectionState}"
     ];
-    $htmlMessage = "A porta {$port} não respondeu ao monitoramento local. "
-        . "Verifique se o processo principal está ativo e reinicie se necessário.";
-    $htmlBody = buildAlarmHtml($subject, 'Monitoramento de servidor offline', $htmlRows, $htmlMessage, $logoUrl);
+    
+    $htmlMessage = "Problemas de saúde detectados na instância. "
+        . "Verifique se o processo principal está ativo e reinicie se necessário.<br><br>"
+        . "<strong>Problemas:</strong><br>"
+        . "- " . implode("<br>- ", array_map(function($err) {
+            return htmlspecialchars($err, ENT_QUOTES, 'UTF-8');
+        }, $health['errors']));
+    
+    $htmlBody = buildAlarmHtml($subject, 'Monitoramento de saúde da instância', $htmlRows, $htmlMessage, $logoUrl);
 
     $sent = sendAlarmEmail($recipients, $subject, $body, $htmlBody);
     if ($sent) {
         saveInstanceSettings($instanceId, ['alarm_server_last_sent' => date('c')]);
-        echo "Alarme de servidor enviado para {$instanceId} -> {$subject}\n";
+        echo "Alarme de saúde enviado para {$instanceId} -> {$subject}\n";
     } else {
-        echo "Falha ao enviar alarme de servidor para {$instanceId}\n";
+        echo "Falha ao enviar alarme de saúde para {$instanceId}\n";
     }
 }

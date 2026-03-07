@@ -403,16 +403,64 @@ function findInstanceByCalendarState(string $state): ?array
 function saveInstanceSettings(string $instanceId, array $entries): array
 {
     $result = ['ok' => false, 'message' => ''];
+    
+    // Validate instance_id
+    if (empty($instanceId)) {
+        $result['message'] = 'Instance ID é obrigatório para salvar configurações';
+        error_log('[saveInstanceSettings] ERROR: Empty instanceId provided');
+        return $result;
+    }
+    
+    // Validate entries
+    if (empty($entries)) {
+        $result['message'] = 'Nenhuma configuração fornecida para salvar';
+        error_log('[saveInstanceSettings] ERROR: Empty entries for instance: ' . $instanceId);
+        return $result;
+    }
+    
+    // DEBUG: Log what's being saved
+    error_log("[DEBUG saveInstanceSettings] instanceId=$instanceId, entries count=" . count($entries));
+    if (isset($entries['ai_system_prompt'])) {
+        $promptLen = strlen($entries['ai_system_prompt']);
+        $promptPreview = substr($entries['ai_system_prompt'], 0, 80);
+        error_log("[DEBUG saveInstanceSettings] ai_system_prompt length=$promptLen, preview=$promptPreview");
+    }
+    
     $db = openInstanceDatabase(false);
+    
     if (!$db) {
         $result['message'] = 'Não foi possível abrir chat_data.db';
+        error_log('[saveInstanceSettings] ERROR: Failed to open database');
         return $result;
     }
 
     if (!sqliteTableExists($db, 'settings')) {
         $result['message'] = 'Tabela settings ausente no SQLite';
+        error_log('[saveInstanceSettings] ERROR: settings table does not exist');
         $db->close();
         return $result;
+    }
+
+    // Special handling for instance name to ensure it's saved properly
+    if (isset($entries['name'])) {
+        $nameResult = saveInstanceName($db, $instanceId, $entries['name']);
+        if (!$nameResult['ok']) {
+            $result['message'] = $nameResult['message'];
+            $db->close();
+            return $result;
+        }
+        unset($entries['name']); // Remove name from regular settings
+    }
+
+    // Handle port changes separately
+    if (isset($entries['port'])) {
+        $portResult = saveInstancePort($db, $instanceId, $entries['port']);
+        if (!$portResult['ok']) {
+            $result['message'] = $portResult['message'];
+            $db->close();
+            return $result;
+        }
+        unset($entries['port']); // Remove port from regular settings
     }
 
     $sql = <<<SQL
@@ -430,26 +478,222 @@ function saveInstanceSettings(string $instanceId, array $entries): array
     }
 
     $allOk = true;
+    $savedCount = 0;
+    $errorMessage = '';
+    
     foreach ($entries as $key => $value) {
-        $stmt->bindValue(':instance', $instanceId ?? '', SQLITE3_TEXT);
+        $stmt->bindValue(':instance', $instanceId, SQLITE3_TEXT);
         $stmt->bindValue(':key', $key, SQLITE3_TEXT);
         $stmt->bindValue(':value', $value ?? '', SQLITE3_TEXT);
         $exec = $stmt->execute();
         if (!$exec) {
             $allOk = false;
-            $result['message'] = 'Erro SQL: ' . $db->lastErrorMsg();
+            $errorMessage = 'Erro SQL: ' . $db->lastErrorMsg();
+            error_log("[saveInstanceSettings] SQL Error for key '$key': " . $db->lastErrorMsg());
             break;
         }
+        $savedCount++;
         $stmt->reset();
     }
 
     $stmt->close();
     $db->close();
 
-    if ($allOk) {
+    if ($allOk && $savedCount > 0) {
         $result['ok'] = true;
+        $result['message'] = 'Salvo com sucesso';
+        error_log("[saveInstanceSettings] SUCCESS: Saved $savedCount settings for instance $instanceId");
+    } elseif (!$allOk) {
+        $result['message'] = $errorMessage;
+        error_log("[saveInstanceSettings] FAILED: $errorMessage");
+    } else {
+        $result['message'] = 'Nenhuma configuração foi salva';
+        error_log("[saveInstanceSettings] WARNING: No entries were saved");
     }
     return $result;
+}
+
+// Special function to handle instance name persistence
+function saveInstanceName(SQLite3 $db, string $instanceId, string $name): array
+{
+    $result = ['ok' => false, 'message' => ''];
+    
+    if (!sqliteTableExists($db, 'instances')) {
+        $result['message'] = 'Tabela instances ausente no SQLite';
+        return $result;
+    }
+
+    $stmt = $db->prepare("
+        UPDATE instances 
+        SET name = :name, updated_at = CURRENT_TIMESTAMP 
+        WHERE instance_id = :instance
+    ");
+    
+    if (!$stmt) {
+        $result['message'] = 'Falha ao preparar instrução SQL para nome';
+        return $result;
+    }
+
+    $stmt->bindValue(':instance', $instanceId, SQLITE3_TEXT);
+    $stmt->bindValue(':name', $name, SQLITE3_TEXT);
+    
+    $exec = $stmt->execute();
+    if (!$exec) {
+        $result['message'] = 'Erro SQL: ' . $db->lastErrorMsg();
+    } else {
+        $result['ok'] = true;
+    }
+    
+    $stmt->close();
+    return $result;
+}
+
+function saveInstancePort(SQLite3 $db, string $instanceId, int $port): array
+{
+    $result = ['ok' => false, 'message' => ''];
+    
+    if (!sqliteTableExists($db, 'instances')) {
+        $result['message'] = 'Tabela instances ausente no SQLite';
+        return $result;
+    }
+
+    $stmt = $db->prepare("
+        UPDATE instances 
+        SET port = :port, updated_at = CURRENT_TIMESTAMP 
+        WHERE instance_id = :instance
+    ");
+    
+    if (!$stmt) {
+        $result['message'] = 'Falha ao preparar instrução SQL para porta';
+        return $result;
+    }
+
+    $stmt->bindValue(':instance', $instanceId, SQLITE3_TEXT);
+    $stmt->bindValue(':port', $port, SQLITE3_INTEGER);
+    
+    $exec = $stmt->execute();
+    if (!$exec) {
+        $result['message'] = 'Erro SQL: ' . $db->lastErrorMsg();
+    } else {
+        $result['ok'] = true;
+    }
+    
+    $stmt->close();
+    return $result;
+}
+
+function normalizeLocalInstanceBaseUrl(?string $baseUrl, ?int $fallbackPort = null): ?string
+{
+    $raw = trim((string)$baseUrl);
+    if ($raw === '') {
+        return null;
+    }
+
+    $decoded = rawurldecode($raw);
+    $candidate = trim($decoded !== '' ? $decoded : $raw);
+    if (!preg_match('#^https?://#i', $candidate)) {
+        return null;
+    }
+
+    $parts = parse_url($candidate);
+    if (!is_array($parts) || empty($parts['host'])) {
+        return null;
+    }
+
+    $host = strtolower((string)$parts['host']);
+    if ($host !== '127.0.0.1' && $host !== 'localhost') {
+        return null;
+    }
+
+    $port = isset($parts['port']) ? (int)$parts['port'] : (int)$fallbackPort;
+    if ($port <= 0) {
+        return null;
+    }
+
+    $path = isset($parts['path']) ? $parts['path'] : '';
+    $query = isset($parts['query']) ? ('?' . $parts['query']) : '';
+    $fragment = isset($parts['fragment']) ? ('#' . $parts['fragment']) : '';
+
+    return "http://127.0.0.1:{$port}{$path}{$query}{$fragment}";
+}
+
+function runLocalBaseUrlSafetyMigration(SQLite3 $db): void
+{
+    static $alreadyRan = false;
+    if ($alreadyRan) {
+        return;
+    }
+    $alreadyRan = true;
+
+    if (!sqliteTableExists($db, 'instances')) {
+        return;
+    }
+
+    $select = $db->prepare("
+        SELECT instance_id, base_url, port
+        FROM instances
+        WHERE base_url IS NOT NULL
+          AND TRIM(base_url) != ''
+    ");
+    if (!$select) {
+        return;
+    }
+
+    $result = $select->execute();
+    if (!$result) {
+        $select->close();
+        return;
+    }
+
+    $updates = [];
+    while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+        $instanceId = (string)($row['instance_id'] ?? '');
+        if ($instanceId === '') {
+            continue;
+        }
+        $original = (string)($row['base_url'] ?? '');
+        $port = isset($row['port']) ? (int)$row['port'] : null;
+        $normalized = normalizeLocalInstanceBaseUrl($original, $port);
+        if ($normalized !== null && $normalized !== $original) {
+            $updates[] = [
+                'instance_id' => $instanceId,
+                'base_url' => $normalized
+            ];
+        }
+    }
+    $result->finalize();
+    $select->close();
+
+    if (!$updates) {
+        return;
+    }
+
+    $updateStmt = $db->prepare("
+        UPDATE instances
+        SET base_url = :base_url,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE instance_id = :instance_id
+    ");
+    if (!$updateStmt) {
+        return;
+    }
+
+    $migrated = 0;
+    foreach ($updates as $item) {
+        $updateStmt->bindValue(':base_url', $item['base_url'], SQLITE3_TEXT);
+        $updateStmt->bindValue(':instance_id', $item['instance_id'], SQLITE3_TEXT);
+        $exec = $updateStmt->execute();
+        if ($exec) {
+            $migrated++;
+            $exec->finalize();
+        }
+        $updateStmt->reset();
+    }
+    $updateStmt->close();
+
+    if ($migrated > 0) {
+        logDebug("[MIGRATION] Normalized local instance base_url to http for {$migrated} instance(s).");
+    }
 }
 
 function loadInstancesFromDatabase(): array
@@ -458,10 +702,13 @@ function loadInstancesFromDatabase(): array
     if (!$db || !sqliteTableExists($db, 'instances')) {
         return [];
     }
+    runLocalBaseUrlSafetyMigration($db);
 
+    // Only load instances that are not marked as deleted
     $stmt = $db->prepare("
         SELECT instance_id, name, port, api_key, status, connection_status, base_url, phone, integration_type, created_at, updated_at
         FROM instances
+        WHERE status != 'deleted'
         ORDER BY created_at ASC
     ");
 
@@ -506,6 +753,7 @@ function loadInstanceRecordFromDatabase(string $instanceId): ?array
     if (!$db || !sqliteTableExists($db, 'instances')) {
         return null;
     }
+    runLocalBaseUrlSafetyMigration($db);
 
     $stmt = $db->prepare("
         SELECT instance_id, name, port, api_key, status, connection_status, base_url, phone, integration_type, created_at, updated_at
@@ -695,22 +943,209 @@ function deleteInstanceRecordFromSql(string $instanceId): bool
 {
     $db = openInstanceDatabase(false);
     if (!$db) {
+        logDebug("[DELETE INSTANCE] Failed to open database for instance: $instanceId");
         return false;
     }
-    if (!sqliteTableExists($db, 'instances')) {
-        $db->close();
-        return false;
+    
+    $success = true;
+    $tables = ['instances', 'settings', 'meta_templates'];
+    
+    foreach ($tables as $table) {
+        if (!sqliteTableExists($db, $table)) {
+            logDebug("[DELETE INSTANCE] Table '$table' does not exist, skipping");
+            continue;
+        }
+        
+        $stmt = $db->prepare("DELETE FROM $table WHERE instance_id = :id");
+        if (!$stmt) {
+            logDebug("[DELETE INSTANCE] Failed to prepare DELETE for table '$table'");
+            $success = false;
+            continue;
+        }
+        
+        $stmt->bindValue(':id', $instanceId, SQLITE3_TEXT);
+        $result = $stmt->execute();
+        $stmt->close();
+        logDebug("[DELETE INSTANCE] Deleted from table '$table' for instance: $instanceId");
     }
-    $stmt = $db->prepare('DELETE FROM instances WHERE instance_id = :id');
-    if (!$stmt) {
-        $db->close();
-        return false;
-    }
-    $stmt->bindValue(':id', $instanceId, SQLITE3_TEXT);
-    $result = $stmt->execute();
-    $stmt->close();
+    
     $db->close();
-    return (bool)$result;
+    return $success;
+}
+
+function stopInstancePm2Process(string $instanceId): bool
+{
+    logDebug("[DELETE INSTANCE] Stopping PM2 process for instance: $instanceId");
+    
+    $scriptPath = __DIR__ . '/stop_instance.sh';
+    if (!file_exists($scriptPath)) {
+        logDebug("[DELETE INSTANCE] stop_instance.sh not found at: $scriptPath");
+        return false;
+    }
+    
+    try {
+        $output = shell_exec("bash " . escapeshellarg($scriptPath) . " " . escapeshellarg($instanceId) . " 2>&1");
+        logDebug("[DELETE INSTANCE] PM2 stop output: " . ($output ?? 'null'));
+        return true;
+    } catch (Exception $e) {
+        logDebug("[DELETE INSTANCE] Failed to stop PM2: " . $e->getMessage());
+        return false;
+    }
+}
+
+function deleteInstanceAuthDirectory(string $instanceId): bool
+{
+    logDebug("[DELETE INSTANCE] Deleting auth directory for instance: $instanceId");
+    
+    $deleted = true;
+    
+    // Check root directory (auth_inst_{instanceId})
+    $authDirRoot = __DIR__ . '/auth_inst_' . $instanceId;
+    if (file_exists($authDirRoot)) {
+        logDebug("[DELETE INSTANCE] Deleting auth directory from root: $authDirRoot");
+        try {
+            $result = recursiveDelete($authDirRoot);
+            if ($result) {
+                logDebug("[DELETE INSTANCE] Successfully deleted auth directory: $authDirRoot");
+            } else {
+                logDebug("[DELETE INSTANCE] Failed to delete auth directory: $authDirRoot");
+                $deleted = false;
+            }
+        } catch (Exception $e) {
+            logDebug("[DELETE INSTANCE] Exception deleting auth directory: " . $e->getMessage());
+            $deleted = false;
+        }
+    }
+    
+    // Check src directory (src/auth_inst_{instanceId}) - legacy location
+    $authDirSrc = __DIR__ . '/src/auth_inst_' . $instanceId;
+    if (file_exists($authDirSrc)) {
+        logDebug("[DELETE INSTANCE] Deleting auth directory from src: $authDirSrc");
+        try {
+            $result = recursiveDelete($authDirSrc);
+            if ($result) {
+                logDebug("[DELETE INSTANCE] Successfully deleted auth directory: $authDirSrc");
+            } else {
+                logDebug("[DELETE INSTANCE] Failed to delete auth directory: $authDirSrc");
+                $deleted = false;
+            }
+        } catch (Exception $e) {
+            logDebug("[DELETE INSTANCE] Exception deleting auth directory: " . $e->getMessage());
+            $deleted = false;
+        }
+    }
+    
+    // Check admin directory (created by whatsapp-server-intelligent.js)
+    $adminAuthDir = '/var/www/html/admin.janeri.com.br/api/envio/wpp/auth_' . $instanceId;
+    if (file_exists($adminAuthDir)) {
+        logDebug("[DELETE INSTANCE] Deleting auth directory from admin: $adminAuthDir");
+        try {
+            $result = recursiveDelete($adminAuthDir);
+            if ($result) {
+                logDebug("[DELETE INSTANCE] Successfully deleted auth directory: $adminAuthDir");
+            } else {
+                logDebug("[DELETE INSTANCE] Failed to delete auth directory: $adminAuthDir");
+                $deleted = false;
+            }
+        } catch (Exception $e) {
+            logDebug("[DELETE INSTANCE] Exception deleting auth directory: " . $e->getMessage());
+            $deleted = false;
+        }
+    }
+    
+    return $deleted;
+}
+
+function recursiveDelete(string $path): bool
+{
+    if (is_dir($path)) {
+        $items = scandir($path);
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') {
+                continue;
+            }
+            $itemPath = $path . DIRECTORY_SEPARATOR . $item;
+            if (!recursiveDelete($itemPath)) {
+                return false;
+            }
+        }
+        return rmdir($path);
+    }
+    
+    if (is_file($path)) {
+        return unlink($path);
+    }
+    
+    return false;
+}
+
+function deleteInstanceCompletely(string $instanceId): array
+{
+    $result = [
+        'ok' => false,
+        'steps' => []
+    ];
+    
+    logDebug("[DELETE INSTANCE] Starting complete deletion for instance: $instanceId");
+    
+    // Step 1: Stop and delete PM2 process
+    $pm2Stopped = stopInstancePm2Process($instanceId);
+    $result['steps']['pm2_stopped'] = $pm2Stopped;
+    logDebug("[DELETE INSTANCE] Step 1 - PM2 process: " . ($pm2Stopped ? 'success' : 'failed'));
+    
+    // Step 2: Delete auth directory
+    $authDirDeleted = deleteInstanceAuthDirectory($instanceId);
+    $result['steps']['auth_dir_deleted'] = $authDirDeleted;
+    logDebug("[DELETE INSTANCE] Step 2 - Auth directory: " . ($authDirDeleted ? 'success' : 'failed'));
+    
+    // Step 3: Delete from SQLite database
+    $sqlDeleted = deleteInstanceRecordFromSql($instanceId);
+    $result['steps']['sql_deleted'] = $sqlDeleted;
+    logDebug("[DELETE INSTANCE] Step 3 - SQL records: " . ($sqlDeleted ? 'success' : 'failed'));
+    
+    // Step 4: Delete from Node.js database (chat_data.db)
+    $nodeJsPath = __DIR__ . '/db-updated.js';
+    $nodeDeleted = false;
+    if (file_exists($nodeJsPath)) {
+        try {
+            // Escape instanceId to prevent shell injection
+            $safeInstanceId = escapeshellcmd($instanceId);
+            $cleanupCmd = "cd " . __DIR__ . " && node -e \"const db = require('./db-updated'); db.deleteInstance('$safeInstanceId').then(r => console.log(JSON.stringify(r))).catch(e => console.error(JSON.stringify({error: e.message})))\" 2>&1";
+            $nodeResult = shell_exec($cleanupCmd);
+            
+            // Parse result if available
+            if ($nodeResult) {
+                $nodeJson = json_decode($nodeResult, true);
+                $nodeDeleted = isset($nodeJson['ok']) && $nodeJson['ok'] === true;
+                logDebug("[DELETE INSTANCE] Step 4 - Node.js cleanup: " . ($nodeDeleted ? 'success' : 'failed') . " | Result: " . substr($nodeResult, 0, 200));
+            } else {
+                logDebug("[DELETE INSTANCE] Step 4 - Node.js cleanup: no output from Node.js");
+            }
+        } catch (Exception $e) {
+            logDebug("[DELETE INSTANCE] Step 4 - Node.js cleanup failed: " . $e->getMessage());
+        }
+    } else {
+        logDebug("[DELETE INSTANCE] Step 4 - Node.js cleanup skipped: db-updated.js not found");
+    }
+    $result['steps']['node_deleted'] = $nodeDeleted;
+    
+    // Step 5: Append to deleted_instances.txt
+    $markerPath = __DIR__ . '/deleted_instances.txt';
+    try {
+        file_put_contents($markerPath, $instanceId . PHP_EOL, FILE_APPEND | LOCK_EX);
+        $result['steps']['marker_created'] = true;
+        logDebug("[DELETE INSTANCE] Step 4 - Marker file updated");
+    } catch (Exception $e) {
+        $result['steps']['marker_created'] = false;
+        logDebug("[DELETE INSTANCE] Step 4 - Marker file failed: " . $e->getMessage());
+    }
+    
+    // Overall success if at least SQL was deleted
+    $result['ok'] = $sqlDeleted;
+    
+    logDebug("[DELETE INSTANCE] Complete deletion finished for instance: $instanceId, success: " . ($result['ok'] ? 'true' : 'false'));
+    
+    return $result;
 }
 
 function upsertMetaTemplate(string $instanceId, string $templateName, array $payload = []): array
@@ -907,10 +1342,13 @@ function deleteMetaTemplate(string $instanceId, string $templateName, string $la
     return $result;
 }
 
-function logDebug(string $message): void
-{
-    if (function_exists('debug_log')) {
-        debug_log($message);
+// Only declare logDebug if it doesn't already exist
+if (!function_exists('logDebug')) {
+    function logDebug(string $message): void
+    {
+        if (function_exists('debug_log')) {
+            debug_log($message);
+        }
     }
 }
 
@@ -1164,10 +1602,10 @@ function sendMetaTemplate(string $instanceId, string $templateName, string $to, 
         return $result;
     }
 
-    $metaSettings = $instance['meta'] ?? [];
-    $accessToken = $metaSettings['access_token'] ?? null;
-    $phoneNumberId = $metaSettings['telephone_id'] ?? null;
-    $apiVersion = $metaSettings['api_version'] ?? 'v22.0';
+    $metaConfig = $instance['meta'] ?? [];
+    $accessToken = $metaConfig['access_token'] ?? null;
+    $phoneNumberId = $metaConfig['telephone_id'] ?? null;
+    $apiVersion = $metaConfig['api_version'] ?? 'v22.0';
 
     if (!$accessToken || !$phoneNumberId) {
         $result['error'] = 'Meta API credentials not configured';

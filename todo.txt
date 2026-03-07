@@ -1,0 +1,369 @@
+================================================================================
+ REFATORAÇÃO DO index.php — Maestro WhatsApp Dashboard
+ Criado em: 2026-02-17
+ Estado atual: 4724 linhas → meta: ~200 linhas (orquestrador fino)
+================================================================================
+
+SITUAÇÃO ATUAL:
+- PHP backend (linhas 1-213) já extraído em includes/, ajax/, views/sidebar.php ✅
+- HTML/PHP views (linhas 214-1883) ainda inline no index.php ❌
+- JavaScript (linhas 1884-4724) ~2840 linhas ainda inline no index.php ❌
+- Arquivos em views/tabs/ e views/modals/ EXISTEM mas NÃO são incluídos ❌
+
+Os arquivos em views/tabs/ e views/modals/ foram criados na sessão anterior
+mas o index.php nunca foi atualizado para usá-los. Precisamos:
+1. Verificar se o conteúdo dos views/ está sincronizado com o index.php
+2. Substituir as seções inline por includes
+3. Extrair todo o JavaScript para arquivos separados
+
+================================================================================
+TAREFAS (marcar [x] quando concluída):
+================================================================================
+
+--- FASE 1: PREPARAR VARIÁVEIS DE AI CONFIG (pré-requisito para tabs) ---
+
+[x] 1.1  Extrair variáveis de configuração AI (linhas 816-852)
+     FEITO: includes/ai-config-vars.php já existe (criado 14:48)
+     Contém: $legacyOpenAIConfig, $aiConfig, $aiEnabled, $aiProvider,
+     $aiModel, $aiHistoryLimit, $aiTemperature, $aiMaxTokens,
+     $aiMultiInputDelay, $aiSystemPrompt, $aiAssistantPrompt,
+     $aiAssistantId, $aiOpenaiMode, $aiOpenaiApiKey, $aiGeminiApiKey,
+     $aiGeminiInstruction, $aiModelFallback1/2, $aiOpenRouterApiKey,
+     $aiOpenRouterBaseUrl, $aiAutoPauseEnabled, $aiAutoPauseMinutes,
+     $alarmConfig, $audioTranscriptionConfig, $audioTranscriptionEnabled,
+     $audioTranscriptionGeminiApiKey, $audioTranscriptionPrefix,
+     $secretaryConfig, $secretaryEnabled, $secretaryIdleHours,
+     $secretaryInitialResponse, $secretaryQuickReplies
+
+     AÇÃO: Adicionar require_once no index.php ANTES da seção de render,
+     e remover as linhas 816-852 do index.php.
+
+--- FASE 2: SINCRONIZAR E INCLUIR VIEWS (HTML/PHP) ---
+
+[ ] 2.1  Verificar e sincronizar views/tabs/tab-messages.php
+     LOCALIZAÇÃO NO INDEX: linhas 784-813 (data-tab-pane="tab-messages")
+     ARQUIVO: views/tabs/tab-messages.php (47 linhas)
+     VARIÁVEIS USADAS: $logSummary
+     AÇÃO: Comparar conteúdo, atualizar se necessário, substituir no
+     index.php por: <?php include __DIR__ . '/views/tabs/tab-messages.php'; ?>
+
+[ ] 2.2  Verificar e sincronizar views/tabs/tab-general.php
+     LOCALIZAÇÃO NO INDEX: linhas 478-783 (data-tab-pane="tab-general")
+     Inclui: Enviar mensagem, Upload arquivos, Config rápida,
+     Auto Pause, cURL Examples
+     ARQUIVO: views/tabs/tab-general.php (333 linhas)
+     VARIÁVEIS USADAS: $selectedInstanceId, $selectedInstance,
+     $_SESSION['csrf_token'], $sendSuccess, $sendError,
+     $assetUploadMessage, $assetUploadError, $assetUploadCode,
+     $quickConfigName, $quickConfigBaseUrl, $quickConfigIntegrationType,
+     $quickConfigMeta*, $quickConfigMessage/Error/Warning,
+     $aiAutoPauseEnabled, $aiAutoPauseMinutes, $curlEndpoint,
+     $curlEndpointPort, $connectionStatuses
+     AÇÃO: Comparar, atualizar, substituir por include.
+
+[ ] 2.3  Verificar e sincronizar views/tabs/tab-ia.php (tab-ia)
+     LOCALIZAÇÃO NO INDEX: linhas 854-1313 (data-tab-pane="tab-ia")
+     Inclui: AI Settings (OpenAI/Gemini/OpenRouter), Functions Panel,
+     Functions Guide, History/Temperature/MaxTokens, Multi-input delay
+     NOTA: Este arquivo NÃO existe ainda em views/tabs/!
+     VARIÁVEIS USADAS: $aiEnabled, $aiProvider, $aiModel,
+     $aiHistoryLimit, $aiTemperature, $aiMaxTokens, $aiMultiInputDelay,
+     $aiSystemPrompt, $aiAssistantPrompt, $aiAssistantId,
+     $aiOpenaiMode, $aiOpenaiApiKey, $aiGeminiApiKey,
+     $aiGeminiInstruction, $aiModelFallback1/2, $aiOpenRouterApiKey,
+     $aiOpenRouterBaseUrl, $integrationType, $aiConfig
+     AÇÃO: Criar views/tabs/tab-ia.php com o conteúdo das linhas 854-1313,
+     incluir no index.php.
+
+[ ] 2.4  Verificar e sincronizar views/tabs/tab-agenda.php
+     LOCALIZAÇÃO NO INDEX: linhas 1314-1417 (data-tab-pane="tab-agenda")
+     Inclui: Google Calendar settings, disponibilidade visual
+     ARQUIVO: views/tabs/tab-agenda.php (119 linhas)
+     VARIÁVEIS USADAS: (nenhuma PHP direta, tudo via JS)
+     AÇÃO: Comparar, atualizar, substituir por include.
+
+[ ] 2.5  Verificar e sincronizar views/tabs/tab-automacao.php
+     LOCALIZAÇÃO NO INDEX: linhas 1418-1595 (data-tab-pane="tab-automacao")
+     Inclui: Audio Transcription, Secretary, Alarms
+     ARQUIVO: views/tabs/tab-automacao.php (201 linhas)
+     VARIÁVEIS USADAS: $quickConfigIntegrationType,
+     $audioTranscriptionEnabled, $audioTranscriptionGeminiApiKey,
+     $audioTranscriptionPrefix, $secretaryEnabled, $secretaryIdleHours,
+     $secretaryInitialResponse, $secretaryQuickReplies,
+     $alarmConfig, $alarmEvents (definido inline)
+     AÇÃO: Comparar, atualizar, substituir por include.
+
+[ ] 2.6  Verificar e sincronizar views/tabs/tab-templates.php
+     LOCALIZAÇÃO NO INDEX: linhas 374-477 (data-tab-pane="tab-templates")
+     Inclui: Templates WhatsApp (Meta), Test Send, Bulk Send
+     ARQUIVO: views/tabs/tab-templates.php (122 linhas)
+     VARIÁVEIS USADAS: (nenhuma direta, tudo via JS)
+     AÇÃO: Comparar, atualizar, substituir por include.
+
+[ ] 2.7  Verificar e sincronizar views/tabs/tab-web-access.php
+     LOCALIZAÇÃO NO INDEX: linhas 1596-1671 (data-tab-pane="tab-web-access")
+     ARQUIVO: views/tabs/tab-web-access.php (92 linhas)
+     VARIÁVEIS USADAS: $webAccessUrl, $webEmbedSnippet,
+     $webFloatingSnippet
+     AÇÃO: Comparar, atualizar, substituir por include.
+
+[ ] 2.8  Verificar e sincronizar views/tabs/tab-monitoramento.php
+     LOCALIZAÇÃO NO INDEX: linhas 1672-1743 (data-tab-pane="tab-monitoramento")
+     ARQUIVO: views/tabs/tab-monitoramento.php (90 linhas)
+     VARIÁVEIS USADAS: $logSummary, $logRange, $selectedInstanceId,
+     $exportLogUrl
+     AÇÃO: Comparar, atualizar, substituir por include.
+
+[ ] 2.9  Verificar e incluir views/modals/create-instance.php
+     LOCALIZAÇÃO NO INDEX: linhas 1787-1803
+     ARQUIVO: views/modals/create-instance.php (32 linhas)
+     VARIÁVEIS: $_SESSION['csrf_token']
+     AÇÃO: Comparar, substituir por include.
+
+[ ] 2.10 Verificar e incluir views/modals/qr-code.php
+     LOCALIZAÇÃO NO INDEX: linhas 1805-1847
+     ARQUIVO: views/modals/qr-code.php (58 linhas)
+     VARIÁVEIS: nenhuma PHP direta
+     AÇÃO: Comparar, substituir por include.
+
+[ ] 2.11 Verificar e incluir views/modals/qr-reset.php
+     LOCALIZAÇÃO NO INDEX: linhas 1848-1862
+     ARQUIVO: views/modals/qr-reset.php (30 linhas)
+     AÇÃO: Comparar, substituir por include.
+
+[ ] 2.12 Verificar e incluir views/modals/debug-log.php
+     LOCALIZAÇÃO NO INDEX: linhas 1748-1778
+     ARQUIVO: views/modals/debug-log.php (50 linhas)
+     VARIÁVEIS: $selectedInstance, $selectedInstanceId,
+     $baileysDebugPaths, $baileysDebugLogs
+     AÇÃO: Comparar, substituir por include.
+
+[ ] 2.13 Verificar e incluir views/modals/ai-test.php
+     LOCALIZAÇÃO NO INDEX: linhas 1864-1882
+     ARQUIVO: views/modals/ai-test.php (34 linhas)
+     AÇÃO: Comparar, substituir por include.
+
+[ ] 2.14 Extrair o header section (linhas 273-358)
+     Inclui: instance-sticky-header, header com badges, botões
+     de ação (Salvar, Deletar, Conectar QR, Desconectar)
+     ARQUIVO A CRIAR: views/header.php
+     VARIÁVEIS: $selectedInstance, $selectedInstanceId, $integrationType,
+     $integrationLabel, $statuses, $connectionStatuses,
+     $quickConfigIntegrationType, $instanceStatus, $connectionState,
+     $serverBadge, $connectionBadge, $connectionBadgeClass,
+     $selectedPhoneLabel, $_SESSION['csrf_token']
+     AÇÃO: Criar arquivo, incluir no index.php.
+
+[ ] 2.15 Extrair o footer (linhas 1779-1786)
+     ARQUIVO A CRIAR: views/footer.php
+     AÇÃO: Criar com o conteúdo do footer + helpTourButton.
+
+--- FASE 3: EXTRAIR JAVASCRIPT PARA ARQUIVOS SEPARADOS ---
+
+[ ] 3.1  Criar assets/js/qr-modal.js
+     LOCALIZAÇÃO NO INDEX: linhas 1884-2145 (~260 linhas)
+     Contém: activeQrInstanceId, qrPollingId, qrCountdownTimer,
+     logout(), openCreateModal(), closeCreateModal(), openQRModal(),
+     closeQRModal(), updateQrStatusGrid(), setQrConnectedState(),
+     openQrResetConfirm(), closeQrResetConfirm(), confirmQrReset(),
+     startQrCountdown(), resetQrSession(), refreshQR()
+     VARIÁVEIS PHP INJETADAS: $_SESSION['csrf_token'] → qrCsrfToken
+     AÇÃO: Extrair JS, no index.php emitir um <script> com as variáveis
+     PHP como window.APP_CONFIG, depois <script src="assets/js/qr-modal.js">
+
+[ ] 3.2  Criar assets/js/stats-loader.js
+     LOCALIZAÇÃO NO INDEX: linhas 2146-2166 (~20 linhas)
+     Contém: fetch de ajax_average_taxar
+     VARIÁVEIS PHP: $selectedInstanceId
+     AÇÃO: Extrair.
+
+[ ] 3.3  Criar assets/js/auto-pause.js
+     LOCALIZAÇÃO NO INDEX: linhas 2167-2255 (~90 linhas)
+     Contém: formulário auto pause, salvar via AJAX
+     VARIÁVEIS PHP: $selectedInstance['api_key'], $selectedInstanceId
+     AÇÃO: Extrair.
+
+[ ] 3.4  Criar assets/js/mobile-sidebar.js
+     LOCALIZAÇÃO NO INDEX: linhas 2256-2279 (~25 linhas)
+     Contém: toggle mobile sidebar
+     VARIÁVEIS PHP: nenhuma
+     AÇÃO: Extrair.
+
+[ ] 3.5  Criar assets/js/send-message.js
+     LOCALIZAÇÃO NO INDEX: linhas 2280-2371 (~90 linhas)
+     Contém: envio de mensagem via AJAX
+     VARIÁVEIS PHP: $selectedInstanceId
+     AÇÃO: Extrair.
+
+[ ] 3.6  Criar assets/js/ai-settings.js
+     LOCALIZAÇÃO NO INDEX: linhas 2372-2878 (~500 linhas)
+     Contém: AI form save, model presets, provider toggle,
+     prompt overlay, key visibility toggle, test AI modal
+     VARIÁVEIS PHP: $selectedInstance['api_key'], $selectedInstanceId,
+     $_SESSION['csrf_token']
+     AÇÃO: Extrair. Este é o maior bloco JS.
+
+[ ] 3.7  Criar assets/js/calendar.js
+     LOCALIZAÇÃO NO INDEX: linhas 2879-3349 (~470 linhas)
+     Contém: Calendar settings, connect/disconnect, save,
+     availability builder, Google calendars list
+     VARIÁVEIS PHP: $selectedInstanceId
+     AÇÃO: Extrair.
+
+[ ] 3.8  Criar assets/js/audio-transcription.js
+     LOCALIZAÇÃO NO INDEX: linhas 3350-3473 (~120 linhas)
+     Contém: save audio transcription config
+     VARIÁVEIS PHP: $selectedInstance['api_key'], $selectedInstanceId
+     AÇÃO: Extrair.
+
+[ ] 3.9  Criar assets/js/secretary.js
+     LOCALIZAÇÃO NO INDEX: linhas 3474-3704 (~230 linhas)
+     Contém: secretary form, quick replies, overlay
+     VARIÁVEIS PHP: $selectedInstance['api_key'], $selectedInstanceId,
+     $secretaryQuickReplies
+     AÇÃO: Extrair.
+
+[ ] 3.10 Criar assets/js/functions-panel.js
+     LOCALIZAÇÃO NO INDEX: linhas 3705-3756 (~50 linhas)
+     Contém: toggle functions panel, copy guide
+     VARIÁVEIS PHP: nenhuma
+     AÇÃO: Extrair.
+
+[ ] 3.11 Criar assets/js/alarms.js
+     LOCALIZAÇÃO NO INDEX: linhas 3757-3876 (~120 linhas)
+     Contém: alarm config save, interval labels
+     VARIÁVEIS PHP: $selectedInstance['api_key'], $selectedInstanceId
+     AÇÃO: Extrair.
+
+[ ] 3.12 Criar assets/js/asset-upload.js
+     LOCALIZAÇÃO NO INDEX: linhas 3877-3996 (~120 linhas)
+     Contém: chunked upload, log range toggle
+     VARIÁVEIS PHP: $selectedInstanceId
+     AÇÃO: Extrair.
+
+[ ] 3.13 Criar assets/js/quick-config.js
+     LOCALIZAÇÃO NO INDEX: linhas 3997-4196 (~200 linhas)
+     Contém: quick config save, integration type toggle,
+     base URL encoding, port auto-update
+     VARIÁVEIS PHP: nenhuma (tudo via DOM)
+     AÇÃO: Extrair.
+
+[ ] 3.14 Criar assets/js/tour.js
+     LOCALIZAÇÃO NO INDEX: linhas 4197-4271 (~75 linhas)
+     Contém: intro.js tour steps
+     VARIÁVEIS PHP: nenhuma
+     AÇÃO: Extrair.
+
+[ ] 3.15 Criar assets/js/tabs.js
+     LOCALIZAÇÃO NO INDEX: linhas 4272-4298 (~25 linhas)
+     Contém: tab switching logic
+     VARIÁVEIS PHP: nenhuma
+     AÇÃO: Extrair.
+
+[ ] 3.16 Criar assets/js/copy-snippet.js
+     LOCALIZAÇÃO NO INDEX: linhas 4299-4328 (~30 linhas)
+     Contém: copy snippet to clipboard
+     VARIÁVEIS PHP: nenhuma
+     AÇÃO: Extrair.
+
+[ ] 3.17 Criar assets/js/instance-search.js
+     LOCALIZAÇÃO NO INDEX: linhas 4330-4343 (~15 linhas)
+     Contém: sidebar instance search filter
+     VARIÁVEIS PHP: nenhuma
+     AÇÃO: Extrair.
+
+[ ] 3.18 Criar assets/js/templates.js
+     LOCALIZAÇÃO NO INDEX: linhas 4345-4665 (~320 linhas)
+     Contém: templates load, send, bulk send
+     VARIÁVEIS PHP: $selectedInstanceId, $selectedInstance['api_key'],
+     $_SESSION['csrf_token']
+     AÇÃO: Extrair.
+
+[ ] 3.19 Criar assets/js/debug-log.js
+     LOCALIZAÇÃO NO INDEX: linhas 4667-4721 (~55 linhas)
+     Contém: debug log overlay, log type switching
+     VARIÁVEIS PHP: $baileysDebugLogs, $baileysDebugPaths
+     AÇÃO: Extrair.
+
+[ ] 3.20 Criar bloco de variáveis PHP→JS no index.php
+     Em vez de cada <script> ter json_encode inline, criar um único
+     bloco <script> no <head> com:
+       window.APP_CONFIG = {
+         instanceId: ...,
+         instanceApiKey: ...,
+         csrfToken: ...,
+         timezone: ...,
+         calendarProxyEndpoint: ...,
+         secretaryQuickReplies: ...,
+         baileysDebugLogs: ...,
+         baileysDebugPaths: ...
+       };
+     Todos os JS externos leem de window.APP_CONFIG.
+     AÇÃO: Criar este bloco e atualizar cada JS para usar APP_CONFIG.
+
+--- FASE 4: LIMPEZA FINAL ---
+
+[ ] 4.1  Remover código morto do index.php
+     Após todos os includes e scripts externos estarem funcionando,
+     verificar que nenhum código inline restou.
+
+[ ] 4.2  Testar funcionamento completo
+     - Login/auth redirect
+     - Sidebar com instâncias
+     - Todas as tabs (messages, general, ia, agenda, automacao,
+       templates, web-access, monitoramento)
+     - Todos os modais (create, qr, qr-reset, ai-test, debug-log)
+     - Todos os forms AJAX (send, save AI, save alarms, save calendar,
+       save audio, save secretary, save quick config, upload asset)
+     - Tour (intro.js)
+     - Mobile sidebar toggle
+     - Instance search filter
+
+[ ] 4.3  Atualizar MEMORY.md com a nova estrutura
+
+================================================================================
+ORDEM DE EXECUÇÃO RECOMENDADA:
+================================================================================
+
+1. Fase 1 (ai-config-vars) → já feito, só precisa integrar
+2. Fase 2 (views) → uma tab por vez, testar cada uma
+3. Fase 3.20 (APP_CONFIG) → criar o bloco centralizado de variáveis
+4. Fase 3.1-3.19 (JS) → extrair cada bloco, testar
+5. Fase 4 (limpeza e testes)
+
+================================================================================
+RESULTADO ESPERADO DO index.php FINAL (~200 linhas):
+================================================================================
+
+<?php (linhas 1-91) — requires, dotenv, session, auth, load instances,
+  statuses, AJAX handler, action handler, data preparation
+?>
+<!doctype html>
+<html>
+<head>
+  <!-- CSS/fonts -->
+  <script>window.APP_CONFIG = { ... }</script>
+</head>
+<body>
+  <!-- Sidebar -->
+  <?php include 'views/sidebar.php' ?>
+  <!-- Mobile sidebar -->
+  <!-- Header -->
+  <?php include 'views/header.php' ?>
+  <!-- Tabs nav -->
+  <!-- Tab panes (each is an include) -->
+  <?php include 'views/tabs/tab-messages.php' ?>
+  <?php include 'views/tabs/tab-general.php' ?>
+  <?php include 'views/tabs/tab-ia.php' ?>
+  ...
+  <!-- Modals (each is an include) -->
+  <?php include 'views/modals/create-instance.php' ?>
+  ...
+  <!-- Footer -->
+  <?php include 'views/footer.php' ?>
+  <!-- JS -->
+  <script src="assets/js/qr-modal.js"></script>
+  <script src="assets/js/ai-settings.js"></script>
+  ...
+</body>
+</html>

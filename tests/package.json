@@ -1,0 +1,37 @@
+{
+  "name": "maestro-tests",
+  "version": "1.5.0",
+  "description": "Test suite for Maestro WhatsApp Orchestrator",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest",
+    "test:unit": "jest tests/unit/",
+    "test:integration": "jest tests/integration/",
+    "test:e2e": "jest tests/e2e/",
+    "test:api": "jest tests/api/",
+    "test:coverage": "jest --coverage",
+    "test:watch": "jest --watch"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^6.3.3",
+    "sinon": "^17.0.1",
+    "nock": "^13.5.0",
+    "@faker-js/faker": "^8.4.0",
+    "cross-env": "^7.0.3"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/tests/**/*.test.js"],
+    "coverageDirectory": "tests/coverage",
+    "collectCoverageFrom": [
+      "src/**/*.js",
+      "api/**/*.php",
+      "models/**/*.php",
+      "controllers/**/*.php",
+      "!**/node_modules/**"
+    ],
+    "testTimeout": 30000,
+    "verbose": true
+  }
+}

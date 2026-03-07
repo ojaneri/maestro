@@ -35,8 +35,7 @@ function createTables(db) {
                 role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
                 content TEXT NOT NULL,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP)
         `
 
         // Table for AI settings (replacing the current instance config approach)
@@ -50,8 +49,7 @@ function createTables(db) {
                 system_prompt TEXT,
                 assistant_prompt TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)
         `
 
         // Table for contacts (to store contact info)
@@ -61,10 +59,23 @@ function createTables(db) {
                 instance_id TEXT NOT NULL,
                 remote_jid TEXT NOT NULL,
                 contact_name TEXT,
+                push_name TEXT,
+                formatted_phone TEXT,
+                status_bio TEXT,
+                lid TEXT,
+                pn TEXT,
                 last_message_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 message_count INTEGER DEFAULT 0,
-                UNIQUE(instance_id, remote_jid)
-            )
+                UNIQUE(instance_id, remote_jid))
+        `
+
+        // Table for LID to PN mappings
+        const lidPnMappingsSQL = `
+            CREATE TABLE IF NOT EXISTS lid_pn_mappings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lid TEXT NOT NULL UNIQUE,
+                pn TEXT NOT NULL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)
         `
 
         // Execute table creation
@@ -87,26 +98,35 @@ function createTables(db) {
                             return
                         }
                         
-                        // Create indexes separately (SQLite doesn't support inline indexes)
-                        const indexes = [
-                            'CREATE INDEX IF NOT EXISTS idx_chat_instance_contact ON chat_history(instance_id, remote_jid)',
-                            'CREATE INDEX IF NOT EXISTS idx_chat_timestamp ON chat_history(timestamp)',
-                            'CREATE INDEX IF NOT EXISTS idx_contacts_instance ON contacts(instance_id)',
-                            'CREATE INDEX IF NOT EXISTS idx_contacts_last_message ON contacts(last_message_at)'
-                        ]
-                        
-                        let completed = 0
-                        indexes.forEach(indexSQL => {
-                            db.run(indexSQL, (err) => {
-                                completed++
-                                if (completed === indexes.length) {
-                                    if (err) {
-                                        reject(err)
-                                    } else {
-                                        console.log('Database tables and indexes created successfully')
-                                        resolve()
+                        db.run(lidPnMappingsSQL, (err) => {
+                            if (err) {
+                                reject(err)
+                                return
+                            }
+                            
+                            // Create indexes separately (SQLite doesn't support inline indexes)
+                            const indexes = [
+                                'CREATE INDEX IF NOT EXISTS idx_chat_instance_contact ON chat_history(instance_id, remote_jid)',
+                                'CREATE INDEX IF NOT EXISTS idx_chat_timestamp ON chat_history(timestamp)',
+                                'CREATE INDEX IF NOT EXISTS idx_contacts_instance ON contacts(instance_id)',
+                                'CREATE INDEX IF NOT EXISTS idx_contacts_last_message ON contacts(last_message_at)',
+                                'CREATE INDEX IF NOT EXISTS idx_lid_pn_mappings_lid ON lid_pn_mappings(lid)',
+                                'CREATE INDEX IF NOT EXISTS idx_lid_pn_mappings_pn ON lid_pn_mappings(pn)'
+                            ]
+                            
+                            let completed = 0
+                            indexes.forEach(indexSQL => {
+                                db.run(indexSQL, (err) => {
+                                    completed++
+                                    if (completed === indexes.length) {
+                                        if (err) {
+                                            reject(err)
+                                        } else {
+                                            console.log('Database tables and indexes created successfully')
+                                            resolve()
+                                        }
                                     }
-                                }
+                                })
                             })
                         })
                     })
@@ -185,6 +205,11 @@ async function getContacts(instanceId, limit = 100, offset = 0) {
             SELECT 
                 remote_jid,
                 contact_name,
+                push_name,
+                formatted_phone,
+                status_bio,
+                lid,
+                pn,
                 last_message_at,
                 message_count,
                 (
@@ -335,6 +360,138 @@ async function getConversationContext(instanceId, remoteJid, limit = 10) {
     })
 }
 
+// Update or insert contact identity info (push_name, formatted_phone, status_bio)
+async function updateContactIdentity(instanceId, remoteJid, identity) {
+    const db = new sqlite3.Database(DB_PATH)
+    
+    // Extract LID and PN from remoteJid if it's a LID format
+    let lid = null
+    let pn = null
+    
+    if (remoteJid && remoteJid.includes('@lid')) {
+        lid = remoteJid
+        // Try to extract PN from identity data
+        pn = identity.pn || identity.formattedPhone || null
+    } else if (remoteJid && !remoteJid.includes('@')) {
+        pn = remoteJid
+    }
+    
+    return new Promise((resolve, reject) => {
+        const sql = `
+            INSERT OR REPLACE INTO contacts 
+            (instance_id, remote_jid, contact_name, push_name, formatted_phone, status_bio, lid, pn, last_message_at)
+            VALUES (
+                ?, ?, 
+                COALESCE((SELECT contact_name FROM contacts WHERE instance_id = ? AND remote_jid = ?), ?),
+                COALESCE((SELECT push_name FROM contacts WHERE instance_id = ? AND remote_jid = ?), ?),
+                COALESCE((SELECT formatted_phone FROM contacts WHERE instance_id = ? AND remote_jid = ?), ?),
+                COALESCE((SELECT status_bio FROM contacts WHERE instance_id = ? AND remote_jid = ?), ?),
+                COALESCE((SELECT lid FROM contacts WHERE instance_id = ? AND remote_jid = ?), ?),
+                COALESCE((SELECT pn FROM contacts WHERE instance_id = ? AND remote_jid = ?), ?),
+                CURRENT_TIMESTAMP
+            )
+        `
+        
+        const params = [
+            instanceId, remoteJid,
+            instanceId, remoteJid, identity.contactName || null,
+            instanceId, remoteJid, identity.pushName || null,
+            instanceId, remoteJid, identity.formattedPhone || null,
+            instanceId, remoteJid, identity.statusBio || null,
+            instanceId, remoteJid, lid || null,
+            instanceId, remoteJid, pn || null
+        ]
+        
+        db.run(sql, params, (err) => {
+            db.close()
+            if (err) reject(err)
+            else resolve({ ok: true, remoteJid, lid, pn })
+        })
+    })
+}
+
+// Get contact identity info
+async function getContactIdentity(instanceId, remoteJid) {
+    const db = new sqlite3.Database(DB_PATH)
+    
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT 
+                remote_jid,
+                contact_name,
+                push_name,
+                formatted_phone,
+                status_bio,
+                lid,
+                pn,
+                last_message_at,
+                message_count
+            FROM contacts 
+            WHERE instance_id = ? AND remote_jid = ?
+        `
+        
+        db.get(sql, [instanceId, remoteJid], (err, row) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(row || null)
+        })
+    })
+}
+
+// Save LID to PN mapping
+async function saveLIDPNMapping(lid, pn) {
+    if (!lid || !pn) return Promise.resolve(null)
+    
+    const db = new sqlite3.Database(DB_PATH)
+    
+    return new Promise((resolve, reject) => {
+        const sql = `
+            INSERT OR REPLACE INTO lid_pn_mappings (lid, pn, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+        `
+        
+        db.run(sql, [lid, pn], (err) => {
+            db.close()
+            if (err) reject(err)
+            else resolve({ ok: true, lid, pn })
+        })
+    })
+}
+
+// Get PN from LID mapping
+async function getPNFromLID(lid) {
+    if (!lid) return Promise.resolve(null)
+    
+    const db = new sqlite3.Database(DB_PATH)
+    
+    return new Promise((resolve, reject) => {
+        const sql = `SELECT pn FROM lid_pn_mappings WHERE lid = ?`
+        
+        db.get(sql, [lid], (err, row) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(row ? row.pn : null)
+        })
+    })
+}
+
+// Get LID from PN mapping
+async function getLIDFromPN(pn) {
+    if (!pn) return Promise.resolve(null)
+    
+    const db = new sqlite3.Database(DB_PATH)
+    
+    return new Promise((resolve, reject) => {
+        const sql = `SELECT lid FROM lid_pn_mappings WHERE pn = ?`
+        
+        db.get(sql, [pn], (err, row) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(row ? row.lid : null)
+        })
+    })
+}
+
 // Export functions
 module.exports = {
     initDatabase,
@@ -343,5 +500,10 @@ module.exports = {
     getContacts,
     saveAISettings,
     getAISettings,
-    getConversationContext
-}
+    getConversationContext,
+    updateContactIdentity,
+    getContactIdentity,
+    saveLIDPNMapping,
+    getPNFromLID,
+    getLIDFromPN
+};

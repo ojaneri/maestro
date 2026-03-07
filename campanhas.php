@@ -1,8 +1,7 @@
 <?php
 require_once __DIR__ . '/vendor/autoload.php';
 require_once __DIR__ . '/instance_data.php';
-
-date_default_timezone_set('America/Fortaleza');
+require_once __DIR__ . '/includes/timezone.php';
 
 define('CAMPAIGN_DB_PATH', __DIR__ . '/campaigns.db');
 

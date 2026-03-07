@@ -1,715 +1,45 @@
 <?php
+/**
+ * Maestro Dashboard — Orquestrador WhatsApp
+ *
+ * Slim orchestrator: all logic is modularized into includes/ajax/views.
+ * This file handles session setup, auth, routing and renders the dashboard.
+ */
+
+// --- Core dependencies ---
 require_once __DIR__ . '/vendor/autoload.php';
+require_once __DIR__ . '/includes/timezone.php';
+require_once __DIR__ . '/includes/functions.php';
+require_once __DIR__ . '/includes/database-helpers.php';
+require_once __DIR__ . '/includes/log-helpers.php';
+require_once __DIR__ . '/includes/baileys-logs.php';
+require_once __DIR__ . '/includes/instance-status.php';
 require_once __DIR__ . '/instance_data.php';
 require_once __DIR__ . '/external_auth.php';
-date_default_timezone_set('America/Fortaleza');
-if (file_exists('debug')) {
-    function debug_log($message) {
-        file_put_contents('debug.log', date('Y-m-d H:i:s') . ' - ' . $message . PHP_EOL, FILE_APPEND | LOCK_EX);
-    }
-} else {
-    function debug_log($message) { }
-}
+require_once __DIR__ . '/views/sidebar.php';
+require_once __DIR__ . '/ajax/handlers.php';
+require_once __DIR__ . '/includes/actions.php';
+require_once __DIR__ . '/includes/ai-config-vars.php';
 
-define('DEFAULT_GEMINI_INSTRUCTION', 'Você é um assistente atencioso e prestativo. Mantenha o tom profissional e informal. Sempre separe claramente o texto visível ao usuário do bloco de instruções/funções usando o marcador lógico &&& antes de iniciar os comandos.');
-define('DEFAULT_MULTI_INPUT_DELAY', 0);
-define('DEFAULT_OPENROUTER_BASE_URL', 'https://openrouter.ai');
+// --- View partials (tabs) ---
+require_once __DIR__ . '/views/tabs/tab-messages.php';
+require_once __DIR__ . '/views/tabs/tab-general.php';
+require_once __DIR__ . '/views/tabs/tab-ia.php';
+require_once __DIR__ . '/views/tabs/tab-agenda.php';
+require_once __DIR__ . '/views/tabs/tab-automacao.php';
+require_once __DIR__ . '/views/tabs/tab-templates.php';
+require_once __DIR__ . '/views/tabs/tab-web-access.php';
+require_once __DIR__ . '/views/tabs/tab-monitoramento.php';
+require_once __DIR__ . '/views/tabs/tab-api.php';
 
-if (!function_exists('perf_mark')) {
-    $perfEnabled = (getenv('PERF_LOG') === '1') || (isset($_GET['perf']) && $_GET['perf'] === '1');
-    $perfStart = microtime(true);
-    $perfMarks = [];
+// --- View partials (modals) ---
+require_once __DIR__ . '/views/modals/debug-log.php';
+require_once __DIR__ . '/views/modals/create-instance.php';
+require_once __DIR__ . '/views/modals/qr-code.php';
+require_once __DIR__ . '/views/modals/qr-reset.php';
+require_once __DIR__ . '/views/modals/ai-test.php';
 
-    function perf_mark(string $label, array $extra = []): void
-    {
-        global $perfEnabled, $perfMarks;
-        if (!$perfEnabled) {
-            return;
-        }
-        $perfMarks[] = [
-            'label' => $label,
-            'time' => microtime(true),
-            'extra' => $extra
-        ];
-    }
-
-    function perf_log(string $context, array $extra = []): void
-    {
-        global $perfEnabled, $perfMarks, $perfStart;
-        if (!$perfEnabled) {
-            return;
-        }
-        $now = microtime(true);
-        $parts = [];
-        $prev = $perfStart;
-        foreach ($perfMarks as $mark) {
-            $delta = ($mark['time'] - $prev) * 1000;
-            $parts[] = $mark['label'] . ':' . round($delta) . 'ms';
-            $prev = $mark['time'];
-        }
-        $total = round(($now - $perfStart) * 1000);
-        $payload = array_merge(['total_ms' => $total, 'marks' => $parts], $extra);
-        debug_log('PERF ' . $context . ' ' . json_encode($payload, JSON_UNESCAPED_SLASHES));
-    }
-}
-
-function isPortOpen($host, $port, $timeout = 1) {
-    $fp = @fsockopen($host, $port, $errno, $errstr, $timeout);
-    if ($fp) {
-        fclose($fp);
-        return true;
-    } else {
-        return false;
-    }
-}
-
-if (!function_exists('buildPublicBaseUrl')) {
-    function buildPublicBaseUrl(string $basePath): string
-    {
-        $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-        $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
-        $normalized = rtrim($basePath, '/');
-        return "{$scheme}://{$host}{$normalized}";
-    }
-}
-
-function dados(string $email): array {
-    $email = trim($email);
-    if ($email === '') {
-        throw new InvalidArgumentException('Email requerido');
-    }
-
-    $host = 'localhost';
-    $db   = 'kitpericia';
-    $user = 'kitpericia';
-    $pass = 'kitpericia';
-    $charset = 'utf8mb4';
-    $dsn = "mysql:host=$host;dbname=$db;charset=$charset";
-    $options = [
-        PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        PDO::ATTR_EMULATE_PREPARES   => false,
-    ];
-
-    $pdo = new PDO($dsn, $user, $pass, $options);
-    $sql = "
-        SELECT 
-            username,
-            email,
-            phone,
-            expiration_date,
-            DATEDIFF(expiration_date, CURDATE()) AS dias_restantes
-        FROM users2
-        WHERE email = :email
-        LIMIT 1
-    ";
-    $stmt = $pdo->prepare($sql);
-    $stmt->bindParam(':email', $email, PDO::PARAM_STR);
-    $stmt->execute();
-    $row = $stmt->fetch();
-    if (!$row) {
-        throw new RuntimeException("Usuário não encontrado para {$email}");
-    }
-
-    $diasRestantes = (int)($row['dias_restantes'] ?? 0);
-    if ($diasRestantes >= 0) {
-        $status = 'ATIVO';
-        $assinaturaInfo = "{$diasRestantes} dias restantes";
-    } else {
-        $status = 'EXPIRADO';
-        $assinaturaInfo = abs($diasRestantes) . ' dias vencidos';
-    }
-
-    return [
-        'nome'            => $row['username'] ?? '',
-        'email'           => $row['email'] ?? '',
-        'telefone'        => $row['phone'] ?? '',
-        'status'          => $status,
-        'assinatura_info' => $assinaturaInfo,
-        'data_expiracao'  => isset($row['expiration_date']) ? date('d/m/Y', strtotime($row['expiration_date'])) : ''
-    ];
-}
-
-function tableExists(SQLite3 $db, string $tableName): bool {
-    $stmt = $db->prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=:name LIMIT 1");
-    $stmt->bindValue(':name', $tableName, SQLITE3_TEXT);
-    $result = $stmt->execute();
-    $exists = false;
-    if ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-        $exists = true;
-    }
-    $result->finalize();
-    $stmt->close();
-    return $exists;
-}
-
-function fetchFromStorage(SQLite3 $db, string $instanceId, int $limit, string $table): array {
-    $perfEnabled = (getenv('PERF_LOG') === '1') || (isset($_GET['perf']) && $_GET['perf'] === '1');
-    $sqlStart = $perfEnabled ? microtime(true) : 0;
-    if ($table === 'messages') {
-        $query = "
-            SELECT 
-                remote_jid,
-                (
-                    SELECT content
-                    FROM messages m2
-                    WHERE m2.instance_id = :instance
-                      AND m2.remote_jid = m.remote_jid
-                    ORDER BY timestamp DESC
-                    LIMIT 1
-                ) AS last_message,
-                MAX(timestamp) AS last_timestamp,
-                (
-                    SELECT role
-                    FROM messages m2
-                    WHERE m2.instance_id = :instance
-                      AND m2.remote_jid = m.remote_jid
-                    ORDER BY timestamp DESC
-                    LIMIT 1
-                ) AS last_role,
-                COUNT(*) AS message_count
-            FROM messages m
-            WHERE m.instance_id = :instance
-            GROUP BY remote_jid
-            ORDER BY last_timestamp DESC
-            LIMIT :limit
-        ";
-    } else {
-        $query = "
-            SELECT 
-                remote_jid,
-                MAX(contact_name) AS contact_name,
-                (
-                    SELECT content
-                    FROM chat_history ch2
-                    WHERE ch2.instance_id = ch.instance_id
-                      AND ch2.remote_jid = ch.remote_jid
-                    ORDER BY timestamp DESC
-                    LIMIT 1
-                ) AS last_message,
-                (
-                    SELECT timestamp
-                    FROM chat_history ch2
-                    WHERE ch2.instance_id = ch.instance_id
-                      AND ch2.remote_jid = ch.remote_jid
-                    ORDER BY timestamp DESC
-                    LIMIT 1
-                ) AS last_timestamp,
-                (
-                    SELECT role
-                    FROM chat_history ch2
-                    WHERE ch2.instance_id = ch.instance_id
-                      AND ch2.remote_jid = ch.remote_jid
-                    ORDER BY timestamp DESC
-                    LIMIT 1
-                ) AS last_role,
-                COUNT(*) AS message_count
-            FROM chat_history ch
-            WHERE ch.instance_id = :instance
-            GROUP BY remote_jid
-            ORDER BY last_timestamp DESC
-            LIMIT :limit
-        ";
-    }
-
-    $stmt = $db->prepare($query);
-    $stmt->bindValue(':instance', $instanceId, SQLITE3_TEXT);
-    $stmt->bindValue(':limit', $limit, SQLITE3_INTEGER);
-    $result = $stmt->execute();
-
-    $chats = [];
-    while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-        $chats[] = $row;
-    }
-
-    $result->finalize();
-    $stmt->close();
-    if ($perfEnabled) {
-        $durationMs = round((microtime(true) - $sqlStart) * 1000);
-        debug_log('PERF sql.fetchFromStorage ' . json_encode([
-            'table' => $table,
-            'instance' => $instanceId,
-            'limit' => $limit,
-            'rows' => count($chats),
-            'ms' => $durationMs
-        ], JSON_UNESCAPED_SLASHES));
-    }
-    return $chats;
-}
-
-function fetchChatHistory($instanceId, $limit = 10) {
-    perf_mark('fetchChatHistory.start', ['instance' => $instanceId, 'limit' => $limit]);
-    $dbPath = __DIR__ . '/chat_data.db';
-    if (!file_exists($dbPath)) {
-        return [];
-    }
-
-    $db = new SQLite3($dbPath, SQLITE3_OPEN_READONLY);
-    $chats = [];
-
-    if (tableExists($db, 'messages')) {
-        $chats = fetchFromStorage($db, $instanceId, $limit, 'messages');
-    }
-
-    if (empty($chats) && tableExists($db, 'chat_history')) {
-        $chats = fetchFromStorage($db, $instanceId, $limit, 'chat_history');
-    }
-
-    $db->close();
-    perf_mark('fetchChatHistory.done', ['rows' => count($chats)]);
-    return $chats;
-}
-
-function parseMessageMetadata(?string $raw): array {
-    if (!$raw) {
-        return [];
-    }
-    $decoded = json_decode($raw, true);
-    return is_array($decoded) ? $decoded : [];
-}
-
-function normalizeLogDateRange(?string $startDate, ?string $endDate, string $timezone = 'America/Fortaleza'): array {
-    if (!$startDate && !$endDate) {
-        return [null, null];
-    }
-    $tz = new DateTimeZone($timezone);
-    $start = null;
-    $end = null;
-    if ($startDate) {
-        $start = DateTime::createFromFormat('Y-m-d H:i:s', $startDate . ' 00:00:00', $tz);
-        if (!$start) {
-            $start = new DateTime($startDate, $tz);
-        }
-        $start->setTime(0, 0, 0);
-    }
-    if ($endDate) {
-        $end = DateTime::createFromFormat('Y-m-d H:i:s', $endDate . ' 23:59:59', $tz);
-        if (!$end) {
-            $end = new DateTime($endDate, $tz);
-        }
-        $end->setTime(23, 59, 59);
-    }
-    $startValue = $start ? $start->format('Y-m-d H:i:s') : null;
-    $endValue = $end ? $end->format('Y-m-d H:i:s') : null;
-    return [$startValue, $endValue];
-}
-
-function resolveLogRangeFromRequest(): array {
-    $preset = isset($_GET['log_range']) ? trim((string)$_GET['log_range']) : 'today';
-    $tz = new DateTimeZone('America/Fortaleza');
-    $start = null;
-    $end = null;
-    $label = '';
-    $customStart = isset($_GET['log_start']) ? trim((string)$_GET['log_start']) : '';
-    $customEnd = isset($_GET['log_end']) ? trim((string)$_GET['log_end']) : '';
-
-    if ($preset === 'today') {
-        $now = new DateTime('now', $tz);
-        $start = $now->format('Y-m-d');
-        $end = $now->format('Y-m-d');
-        $label = 'Hoje';
-    } elseif ($preset === 'yesterday') {
-        $now = new DateTime('now', $tz);
-        $now->modify('-1 day');
-        $start = $now->format('Y-m-d');
-        $end = $now->format('Y-m-d');
-        $label = 'Ontem';
-    } elseif ($preset === 'all') {
-        $label = 'Período total';
-        return [
-            'preset' => $preset,
-            'label' => $label,
-            'start' => null,
-            'end' => null,
-            'custom_start' => $customStart,
-            'custom_end' => $customEnd
-        ];
-    } elseif ($preset === 'custom') {
-        $label = 'Personalizado';
-        $start = $customStart ?: null;
-        $end = $customEnd ?: null;
-    } else {
-        $preset = 'today';
-        $now = new DateTime('now', $tz);
-        $start = $now->format('Y-m-d');
-        $end = $now->format('Y-m-d');
-        $label = 'Hoje';
-    }
-
-    [$normalizedStart, $normalizedEnd] = normalizeLogDateRange($start, $end);
-    return [
-        'preset' => $preset,
-        'label' => $label,
-        'start' => $normalizedStart,
-        'end' => $normalizedEnd,
-        'custom_start' => $customStart,
-        'custom_end' => $customEnd
-    ];
-}
-
-function formatLogDateTime(?string $value): string {
-    if (!$value) {
-        return '';
-    }
-    try {
-        $date = new DateTime($value, new DateTimeZone('UTC'));
-        $date->setTimezone(new DateTimeZone('America/Fortaleza'));
-        return $date->format('d/m/Y H:i:s');
-    } catch (Exception $e) {
-        return $value;
-    }
-}
-
-function formatLogDateForFilename(?string $value): string {
-    if (!$value) {
-        return '';
-    }
-    $parts = explode(' ', $value);
-    return preg_replace('/[^0-9-]/', '', $parts[0] ?? $value);
-}
-
-function formatCommandArgsForLog($args): string {
-    if (!is_array($args)) {
-        return 'sem argumentos';
-    }
-    $clean = [];
-    foreach ($args as $arg) {
-        $text = trim((string)($arg ?? ''));
-        if ($text !== '') {
-            $clean[] = $text;
-        }
-    }
-    return $clean ? implode(', ', $clean) : 'sem argumentos';
-}
-
-function formatCommandResultSummary(string $type, $result): ?string {
-    if ($result === null || $result === '') {
-        return null;
-    }
-    $type = strtolower($type);
-    if ($type === 'dados' && is_array($result)) {
-        $name = $result['nome'] ?? ($result['email'] ?? 'Cliente');
-        $status = $result['status'] ?? 'sem status';
-        $info = isset($result['assinatura_info']) ? ' • ' . $result['assinatura_info'] : '';
-        return "{$name} está {$status}{$info}";
-    }
-    if (in_array($type, ['agendar', 'agendar2', 'cancelar_e_agendar2'], true) && is_array($result)) {
-        $data = $result['data'] ?? [];
-        $scheduledAt = $result['scheduledAt'] ?? $result['scheduled_at'] ?? $data['scheduledAt'] ?? $data['scheduled_at'] ?? null;
-        $scheduledLabel = $scheduledAt ? formatLogDateTime((string)$scheduledAt) : 'horário indefinido';
-        return "agendamento previsto para {$scheduledLabel}";
-    }
-    if (is_array($result)) {
-        $payload = [];
-        if (isset($result['ok'])) {
-            $payload[] = 'ok=' . ($result['ok'] ? 'true' : 'false');
-        }
-        if (!empty($result['code'])) {
-            $payload[] = 'code=' . $result['code'];
-        }
-        if (!empty($result['message'])) {
-            $payload[] = 'msg=' . $result['message'];
-        }
-        if (!empty($result['data'])) {
-            $payload[] = 'data=' . json_encode($result['data'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        }
-        if ($payload) {
-            return implode(' | ', $payload);
-        }
-        return json_encode($result, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    }
-    if (is_string($result)) {
-        return $result;
-    }
-    return (string)$result;
-}
-
-function getInstanceLogSummary(string $instanceId, ?string $start = null, ?string $end = null): array {
-    $summary = [
-        'total_messages' => 0,
-        'total_contacts' => 0,
-        'total_inbound' => 0,
-        'total_outbound' => 0,
-        'total_commands' => 0,
-        'scheduled_pending' => 0,
-        'scheduled_sent' => 0,
-        'scheduled_failed' => 0,
-        'first_message_at' => '',
-        'last_message_at' => ''
-    ];
-    $dbPath = __DIR__ . '/chat_data.db';
-    if (!file_exists($dbPath)) {
-        return $summary;
-    }
-    $db = new SQLite3($dbPath, SQLITE3_OPEN_READONLY);
-    $table = tableExists($db, 'messages') ? 'messages' : (tableExists($db, 'chat_history') ? 'chat_history' : '');
-    if (!$table) {
-        $db->close();
-        return $summary;
-    }
-
-    $where = "instance_id = :instance";
-    if ($start) {
-        $where .= " AND timestamp >= :start";
-    }
-    if ($end) {
-        $where .= " AND timestamp <= :end";
-    }
-    $stmt = $db->prepare("SELECT COUNT(*) as total, COUNT(DISTINCT remote_jid) as contacts, MIN(timestamp) as first_ts, MAX(timestamp) as last_ts FROM {$table} WHERE {$where}");
-    $stmt->bindValue(':instance', $instanceId, SQLITE3_TEXT);
-    if ($start) {
-        $stmt->bindValue(':start', $start, SQLITE3_TEXT);
-    }
-    if ($end) {
-        $stmt->bindValue(':end', $end, SQLITE3_TEXT);
-    }
-    $row = $stmt->execute()->fetchArray(SQLITE3_ASSOC);
-    $summary['total_messages'] = (int)($row['total'] ?? 0);
-    $summary['total_contacts'] = (int)($row['contacts'] ?? 0);
-    $summary['first_message_at'] = $row['first_ts'] ?? '';
-    $summary['last_message_at'] = $row['last_ts'] ?? '';
-    $stmt->close();
-
-    if ($table === 'messages') {
-        $stmt = $db->prepare("SELECT COUNT(*) as total FROM messages WHERE {$where} AND direction = :direction");
-        $stmt->bindValue(':instance', $instanceId, SQLITE3_TEXT);
-        if ($start) {
-            $stmt->bindValue(':start', $start, SQLITE3_TEXT);
-        }
-        if ($end) {
-            $stmt->bindValue(':end', $end, SQLITE3_TEXT);
-        }
-        $stmt->bindValue(':direction', 'inbound', SQLITE3_TEXT);
-        $summary['total_inbound'] = (int)($stmt->execute()->fetchArray(SQLITE3_ASSOC)['total'] ?? 0);
-        $stmt->reset();
-        $stmt->bindValue(':instance', $instanceId, SQLITE3_TEXT);
-        if ($start) {
-            $stmt->bindValue(':start', $start, SQLITE3_TEXT);
-        }
-        if ($end) {
-            $stmt->bindValue(':end', $end, SQLITE3_TEXT);
-        }
-        $stmt->bindValue(':direction', 'outbound', SQLITE3_TEXT);
-        $summary['total_outbound'] = (int)($stmt->execute()->fetchArray(SQLITE3_ASSOC)['total'] ?? 0);
-        $stmt->close();
-
-        $stmt = $db->prepare("SELECT metadata FROM messages WHERE {$where} AND metadata IS NOT NULL AND metadata != ''");
-        $stmt->bindValue(':instance', $instanceId, SQLITE3_TEXT);
-        if ($start) {
-            $stmt->bindValue(':start', $start, SQLITE3_TEXT);
-        }
-        if ($end) {
-            $stmt->bindValue(':end', $end, SQLITE3_TEXT);
-        }
-        $res = $stmt->execute();
-        $commandCount = 0;
-        while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
-            $meta = parseMessageMetadata($row['metadata'] ?? '');
-            $commands = $meta['commands'] ?? [];
-            if (is_array($commands)) {
-                $commandCount += count($commands);
-            }
-        }
-        $res->finalize();
-        $stmt->close();
-        $summary['total_commands'] = $commandCount;
-    }
-
-    if (tableExists($db, 'scheduled_messages')) {
-        $stmt = $db->prepare("SELECT status, COUNT(*) as total FROM scheduled_messages WHERE instance_id = :instance GROUP BY status");
-        $stmt->bindValue(':instance', $instanceId, SQLITE3_TEXT);
-        $res = $stmt->execute();
-        while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
-            $status = strtolower((string)($row['status'] ?? ''));
-            if ($status === 'pending') {
-                $summary['scheduled_pending'] = (int)$row['total'];
-            } elseif ($status === 'sent') {
-                $summary['scheduled_sent'] = (int)$row['total'];
-            } elseif ($status === 'failed') {
-                $summary['scheduled_failed'] = (int)$row['total'];
-            }
-        }
-        $res->finalize();
-        $stmt->close();
-    }
-
-    $db->close();
-    return $summary;
-}
-
-function buildAllConversationsLog(string $instanceId, array $instanceInfo = [], ?string $start = null, ?string $end = null): string {
-    $dbPath = __DIR__ . '/chat_data.db';
-    if (!file_exists($dbPath)) {
-        return "Nenhum banco de dados encontrado para exportar.\n";
-    }
-    $db = new SQLite3($dbPath, SQLITE3_OPEN_READONLY);
-    $table = tableExists($db, 'messages') ? 'messages' : (tableExists($db, 'chat_history') ? 'chat_history' : '');
-    if (!$table) {
-        $db->close();
-        return "Nenhuma tabela de mensagens encontrada.\n";
-    }
-
-    $summary = getInstanceLogSummary($instanceId, $start, $end);
-    $instanceLabel = $instanceInfo['name'] ?? $instanceId;
-    $lines = [];
-    $lines[] = "Log completo de conversas";
-    $lines[] = "Instância: {$instanceLabel}";
-    $lines[] = "ID: {$instanceId}";
-    $lines[] = "Gerado em: " . formatLogDateTime(gmdate('Y-m-d H:i:s'));
-    $lines[] = "Total mensagens: {$summary['total_messages']}";
-    $lines[] = "Total contatos: {$summary['total_contacts']}";
-    $lines[] = "Mensagens recebidas: {$summary['total_inbound']}";
-    $lines[] = "Mensagens enviadas: {$summary['total_outbound']}";
-    $lines[] = "Comandos executados: {$summary['total_commands']}";
-    $lines[] = "Agendamentos pendentes: {$summary['scheduled_pending']}";
-    $lines[] = "Agendamentos enviados: {$summary['scheduled_sent']}";
-    $lines[] = "Agendamentos falhados: {$summary['scheduled_failed']}";
-    if (!empty($summary['last_message_at'])) {
-        $lines[] = "Última atividade: " . formatLogDateTime($summary['last_message_at']);
-    }
-    $lines[] = str_repeat('-', 72);
-
-    $contactMeta = [];
-    if (tableExists($db, 'contact_metadata')) {
-        $stmt = $db->prepare("SELECT remote_jid, contact_name, status_name FROM contact_metadata WHERE instance_id = :instance");
-        $stmt->bindValue(':instance', $instanceId, SQLITE3_TEXT);
-        $res = $stmt->execute();
-        while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
-            $contactMeta[$row['remote_jid']] = $row;
-        }
-        $res->finalize();
-        $stmt->close();
-    }
-
-    $contactStats = [];
-    $where = "instance_id = :instance";
-    if ($start) {
-        $where .= " AND timestamp >= :start";
-    }
-    if ($end) {
-        $where .= " AND timestamp <= :end";
-    }
-    $stmt = $db->prepare("SELECT remote_jid, COUNT(*) as total, MAX(timestamp) as last_ts FROM {$table} WHERE {$where} GROUP BY remote_jid");
-    $stmt->bindValue(':instance', $instanceId, SQLITE3_TEXT);
-    if ($start) {
-        $stmt->bindValue(':start', $start, SQLITE3_TEXT);
-    }
-    if ($end) {
-        $stmt->bindValue(':end', $end, SQLITE3_TEXT);
-    }
-    $res = $stmt->execute();
-    while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
-        $contactStats[$row['remote_jid']] = [
-            'total' => (int)$row['total'],
-            'last_ts' => $row['last_ts'] ?? ''
-        ];
-    }
-    $res->finalize();
-    $stmt->close();
-
-    $selectColumns = $table === 'messages'
-        ? "remote_jid, role, content, timestamp, direction, metadata"
-        : "remote_jid, role, content, timestamp";
-    $stmt = $db->prepare("SELECT {$selectColumns} FROM {$table} WHERE {$where} ORDER BY remote_jid ASC, timestamp ASC, id ASC");
-    $stmt->bindValue(':instance', $instanceId, SQLITE3_TEXT);
-    if ($start) {
-        $stmt->bindValue(':start', $start, SQLITE3_TEXT);
-    }
-    if ($end) {
-        $stmt->bindValue(':end', $end, SQLITE3_TEXT);
-    }
-    $res = $stmt->execute();
-    $currentJid = null;
-
-    while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
-        $remoteJid = $row['remote_jid'] ?? '';
-        if ($remoteJid !== $currentJid) {
-            $currentJid = $remoteJid;
-            $meta = $contactMeta[$remoteJid] ?? [];
-            $label = $meta['contact_name'] ?? $meta['status_name'] ?? $remoteJid;
-            $stats = $contactStats[$remoteJid] ?? ['total' => 0, 'last_ts' => ''];
-            $lines[] = "";
-            $lines[] = "Conversa: {$label}";
-            $lines[] = "Remote JID: {$remoteJid}";
-            $lines[] = "Mensagens registradas: {$stats['total']}";
-            if (!empty($stats['last_ts'])) {
-                $lines[] = "Última mensagem: " . formatLogDateTime($stats['last_ts']);
-            }
-            $lines[] = str_repeat('-', 48);
-        }
-
-        $timestamp = formatLogDateTime($row['timestamp'] ?? '') ?: 'sem horário';
-        $role = $row['role'] ?? 'desconhecido';
-        $direction = $row['direction'] ?? '';
-        if ($direction === '') {
-            $direction = $role === 'assistant' ? 'outbound' : 'inbound';
-        }
-        $directionLabel = $direction === 'outbound' ? 'ENVIADA' : 'RECEBIDA';
-        $content = trim((string)($row['content'] ?? ''));
-
-        $lines[] = "[{$timestamp}] [{$directionLabel}] {$role}";
-        $lines[] = $content;
-
-        if ($table === 'messages') {
-            $metadata = parseMessageMetadata($row['metadata'] ?? '');
-            $commandList = isset($metadata['commands']) && is_array($metadata['commands']) ? $metadata['commands'] : [];
-            if ($commandList) {
-                foreach ($commandList as $cmd) {
-                    $type = (string)($cmd['type'] ?? 'função');
-                    $argsText = formatCommandArgsForLog($cmd['args'] ?? []);
-                    $lines[] = "  [COMANDO] {$type}({$argsText})";
-                    $summary = formatCommandResultSummary($type, $cmd['result'] ?? null);
-                    if ($summary) {
-                        $lines[] = "  [RETORNO] {$summary}";
-                    }
-                }
-            }
-
-            $metaNotes = [];
-            if (!empty($metadata['severity'])) {
-                $metaNotes[] = 'severity=' . $metadata['severity'];
-            }
-            if (!empty($metadata['error'])) {
-                $metaNotes[] = 'error=' . $metadata['error'];
-            }
-            if (!empty($metadata['debug'])) {
-                $metaNotes[] = 'debug=true';
-            }
-            if ($metaNotes) {
-                $lines[] = "  [METADATA] " . implode(' | ', $metaNotes);
-            }
-        }
-
-        $lines[] = "";
-    }
-
-    $res->finalize();
-    $stmt->close();
-    $db->close();
-
-    return implode("\n", $lines);
-}
-
-function formatInstancePhoneLabel($jid) {
-    if (!$jid) {
-        return '';
-    }
-    $parts = explode('@', $jid, 2);
-    $local = $parts[0];
-    $domain = $parts[1] ?? 's.whatsapp.net';
-    $digits = preg_replace('/\\D/', '', $local);
-    $formatted = '';
-    if (preg_match('/^55(\\d{2})(\\d{4,5})(\\d{4})$/', $digits, $matches)) {
-        $formatted = "55 {$matches[1]} {$matches[2]}-{$matches[3]}";
-    } elseif (preg_match('/^(\\d{2})(\\d{4,5})(\\d{4})$/', $digits, $matches)) {
-        $formatted = "{$matches[1]} {$matches[2]}-{$matches[3]}";
-    } elseif ($digits) {
-        $formatted = $digits;
-    }
-    $label = $formatted ?: $local;
-    return "{$label} @{$domain}";
-}
-
+// --- Dotenv ---
 $dotenv = Dotenv\Dotenv::createImmutable(__DIR__);
 try {
     $dotenv->load();
@@ -721,7 +51,7 @@ debug_log('PANEL_USER_EMAIL from _ENV: ' . ($_ENV['PANEL_USER_EMAIL'] ?? 'not se
 debug_log('PANEL_PASSWORD from _ENV: ' . (isset($_ENV['PANEL_PASSWORD']) ? '***' : 'not set'));
 debug_log('PANEL_USER_EMAIL from getenv: ' . (getenv('PANEL_USER_EMAIL') ?: 'not set'));
 
-// --- Autenticação ---
+// --- Authentication ---
 session_start();
 
 if (empty($_SESSION['csrf_token'])) {
@@ -738,29 +68,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-function rrmdir(string $dir): void
-{
-    if (!is_dir($dir)) {
-        return;
-    }
-    $items = scandir($dir);
-    if ($items === false) {
-        return;
-    }
-    foreach ($items as $item) {
-        if ($item === '.' || $item === '..') {
-            continue;
-        }
-        $path = $dir . '/' . $item;
-        if (is_dir($path)) {
-            rrmdir($path);
-        } else {
-            @unlink($path);
-        }
-    }
-    @rmdir($dir);
-}
-
 debug_log('Session started. Auth: ' . (isset($_SESSION['auth']) ? 'true' : 'false'));
 perf_mark('session.ready');
 ensureExternalUsersSchema();
@@ -775,236 +82,7 @@ if (!$isAdmin && !$isManager) {
     exit;
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['ajax_ai_config']) && isset($_GET['instance'])) {
-    perf_mark('ajax.ai_config.start');
-    $instanceIdForAjax = $_GET['instance'];
-    $instanceRecord = loadInstanceRecordFromDatabase($instanceIdForAjax);
-    $aiPayload = $instanceRecord['ai'] ?? [];
-    header('Content-Type: application/json; charset=utf-8');
-    if (!$instanceRecord) {
-        echo json_encode([
-            'ok' => false,
-            'error' => 'Instância não encontrada'
-        ]);
-        perf_log('ajax.ai_config', ['status' => 'not_found', 'instance' => $instanceIdForAjax]);
-        exit;
-    }
-    echo json_encode([
-        'ok' => true,
-        'ai' => $aiPayload,
-        'instance' => $instanceRecord['instance_id'] ?? $instanceIdForAjax
-    ]);
-    perf_log('ajax.ai_config', ['status' => 'ok', 'instance' => $instanceIdForAjax]);
-    exit;
-}
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['ajax_save_ai'])) {
-    perf_mark('ajax.save_ai.start');
-    header('Content-Type: application/json; charset=utf-8');
-    $targetInstanceId = $_GET['instance'] ?? null;
-    if (!$targetInstanceId) {
-        http_response_code(404);
-        echo json_encode(['success' => false, 'error' => 'Instância não encontrada']);
-        perf_log('ajax.save_ai', ['status' => 'not_found']);
-        exit;
-    }
-    $instanceRecord = loadInstanceRecordFromDatabase($targetInstanceId);
-    if (!$instanceRecord) {
-        http_response_code(404);
-        echo json_encode(['success' => false, 'error' => 'Instância não encontrada']);
-        perf_log('ajax.save_ai', ['status' => 'not_found']);
-        exit;
-    }
-
-    $payload = $_POST;
-    $enabled = !empty($payload['ai_enabled']) && $payload['ai_enabled'] !== '0';
-    $provider = in_array($payload['ai_provider'] ?? 'openai', ['openai', 'gemini', 'openrouter'], true)
-        ? $payload['ai_provider']
-        : 'openai';
-    $model = trim($payload['ai_model'] ?? 'gpt-4.1-mini');
-    $systemPrompt = trim($payload['ai_system_prompt'] ?? '');
-    $assistantPrompt = trim($payload['ai_assistant_prompt'] ?? '');
-    $assistantId = trim($payload['ai_assistant_id'] ?? '');
-    $historyLimit = max(1, (int)($payload['ai_history_limit'] ?? 20));
-    $temperature = max(0, floatval($payload['ai_temperature'] ?? 0.3));
-    $maxTokens = max(64, (int)($payload['ai_max_tokens'] ?? 600));
-    $multiInputDelay = max(0, (int)($payload['ai_multi_input_delay'] ?? 0));
-    $openaiMode = in_array($payload['openai_mode'] ?? 'responses', ['responses', 'assistants'], true)
-        ? $payload['openai_mode']
-        : 'responses';
-    $openaiApiKey = trim($payload['openai_api_key'] ?? '');
-    $geminiApiKey = trim($payload['gemini_api_key'] ?? '');
-    $geminiInstruction = trim($payload['gemini_instruction'] ?? '');
-    $modelFallback1 = trim($payload['ai_model_fallback_1'] ?? '');
-    $modelFallback2 = trim($payload['ai_model_fallback_2'] ?? '');
-    $openrouterApiKey = trim($payload['openrouter_api_key'] ?? '');
-    $openrouterBaseUrl = trim($payload['openrouter_base_url'] ?? '');
-
-    if ($enabled && $provider === 'openai') {
-        if (!$openaiApiKey) {
-            http_response_code(400);
-            echo json_encode(['success' => false, 'error' => 'OpenAI API key é obrigatória']);
-            perf_log('ajax.save_ai', ['status' => 'invalid_openai_key']);
-            exit;
-        }
-        if (!preg_match('/^sk-[A-Za-z0-9_.-]{48,}$/', $openaiApiKey)) {
-            http_response_code(400);
-            echo json_encode(['success' => false, 'error' => 'Formato da OpenAI API key inválido']);
-            perf_log('ajax.save_ai', ['status' => 'invalid_openai_format']);
-            exit;
-        }
-        if ($openaiMode === 'assistants' && $assistantId === '') {
-            http_response_code(400);
-            echo json_encode(['success' => false, 'error' => 'Assistant ID é obrigatório']);
-            perf_log('ajax.save_ai', ['status' => 'missing_assistant_id']);
-            exit;
-        }
-    }
-
-    if ($enabled && $provider === 'gemini' && !$geminiApiKey) {
-        http_response_code(400);
-        echo json_encode(['success' => false, 'error' => 'Gemini API key é obrigatória']);
-        perf_log('ajax.save_ai', ['status' => 'invalid_gemini_key']);
-        exit;
-    }
-
-    if ($enabled && $provider === 'openrouter' && !$openrouterApiKey) {
-        http_response_code(400);
-        echo json_encode(['success' => false, 'error' => 'OpenRouter API key é obrigatória']);
-        perf_log('ajax.save_ai', ['status' => 'invalid_openrouter_key']);
-        exit;
-    }
-
-    $nodePayload = [
-        'enabled' => $enabled,
-        'provider' => $provider,
-        'model' => $model,
-        'system_prompt' => $systemPrompt,
-        'assistant_prompt' => $assistantPrompt,
-        'assistant_id' => $assistantId,
-        'history_limit' => $historyLimit,
-        'temperature' => $temperature,
-        'max_tokens' => $maxTokens,
-        'multi_input_delay' => $multiInputDelay,
-        'openai_api_key' => $openaiApiKey,
-        'openai_mode' => $openaiMode,
-        'gemini_api_key' => $geminiApiKey,
-        'gemini_instruction' => $geminiInstruction,
-        'ai_model_fallback_1' => $modelFallback1,
-        'ai_model_fallback_2' => $modelFallback2,
-        'openrouter_api_key' => $openrouterApiKey,
-        'openrouter_base_url' => $openrouterBaseUrl,
-        'meta_access_token' => trim($payload['meta_access_token'] ?? ''),
-        'auto_pause_enabled' => !empty($payload['auto_pause_enabled']) && $payload['auto_pause_enabled'] !== '0',
-        'auto_pause_minutes' => max(1, (int)($payload['auto_pause_minutes'] ?? 5))
-    ];
-
-    $port = (int)($instanceRecord['port'] ?? 0);
-    if (!$port) {
-        http_response_code(500);
-        echo json_encode(['success' => false, 'error' => 'Porta da instância inválida']);
-        perf_log('ajax.save_ai', ['status' => 'invalid_port']);
-        exit;
-    }
-
-    $nodeUrl = "http://127.0.0.1:{$port}/api/ai-config";
-    $ch = curl_init($nodeUrl);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, ["Content-Type: application/json"]);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($nodePayload));
-    $nodeResp = curl_exec($ch);
-    $nodeErr = curl_error($ch);
-    $nodeCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-
-    if ($nodeErr) {
-        http_response_code(502);
-        echo json_encode(['success' => false, 'error' => "Falha ao conectar no Node: {$nodeErr}"]);
-        perf_log('ajax.save_ai', ['status' => 'node_error']);
-        exit;
-    }
-    if ($nodeCode >= 400) {
-        $decoded = json_decode($nodeResp, true);
-        $detail = $decoded['error'] ?? ($decoded['detail'] ?? 'Erro no Node');
-        http_response_code($nodeCode);
-        echo json_encode(['success' => false, 'error' => $detail]);
-        perf_log('ajax.save_ai', ['status' => 'node_fail', 'http' => $nodeCode]);
-        exit;
-    }
-
-    // Save AI settings to database
-    $dbSettings = [
-        'ai_enabled' => $enabled ? '1' : '0',
-        'ai_provider' => $provider,
-        'ai_model' => $model,
-        'ai_system_prompt' => $systemPrompt,
-        'ai_assistant_prompt' => $assistantPrompt,
-        'ai_assistant_id' => $assistantId,
-        'ai_history_limit' => (string)$historyLimit,
-        'ai_temperature' => (string)$temperature,
-        'ai_max_tokens' => (string)$maxTokens,
-        'ai_multi_input_delay' => (string)$multiInputDelay,
-        'openai_api_key' => $openaiApiKey,
-        'openai_mode' => $openaiMode,
-        'gemini_api_key' => $geminiApiKey,
-        'gemini_instruction' => $geminiInstruction,
-        'ai_model_fallback_1' => $modelFallback1,
-        'ai_model_fallback_2' => $modelFallback2,
-        'openrouter_api_key' => $openrouterApiKey,
-        'openrouter_base_url' => $openrouterBaseUrl,
-        'meta_access_token' => trim($payload['meta_access_token'] ?? ''),
-        'meta_business_account_id' => trim($payload['meta_business_account_id'] ?? ''),
-        'meta_telephone_id' => trim($payload['meta_telephone_id'] ?? ''),
-        'auto_pause_enabled' => !empty($payload['auto_pause_enabled']) && $payload['auto_pause_enabled'] !== '0' ? '1' : '0',
-        'auto_pause_minutes' => (string)max(1, (int)($payload['auto_pause_minutes'] ?? 5))
-    ];
-    
-    $saveResult = saveInstanceSettings($targetInstanceId, $dbSettings);
-    if (!$saveResult['ok']) {
-        http_response_code(500);
-        echo json_encode(['success' => false, 'error' => 'Falha ao salvar configurações no banco de dados']);
-        perf_log('ajax.save_ai', ['status' => 'db_error']);
-        exit;
-    }
-
-    echo json_encode(['success' => true]);
-    perf_log('ajax.save_ai', ['status' => 'ok']);
-    exit;
-}
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['qr_reset'])) {
-    perf_mark('ajax.qr_reset.start');
-    $instanceId = trim((string) $_POST['qr_reset']);
-    header('Content-Type: application/json; charset=utf-8');
-    if ($instanceId === '' || !preg_match('/^[\w-]{1,64}$/', $instanceId)) {
-        http_response_code(400);
-        echo json_encode(['ok' => false, 'message' => 'Instância inválida.']);
-        perf_log('ajax.qr_reset', ['status' => 'invalid']);
-        exit;
-    }
-    $instanceRecord = loadInstanceRecordFromDatabase($instanceId);
-    if (!$instanceRecord) {
-        http_response_code(404);
-        echo json_encode(['ok' => false, 'message' => 'Instância não encontrada.']);
-        perf_log('ajax.qr_reset', ['status' => 'not_found', 'instance' => $instanceId]);
-        exit;
-    }
-    $authDir = __DIR__ . '/auth_' . $instanceId;
-    rrmdir($authDir);
-    $restartScript = __DIR__ . '/restart_instance.sh';
-    if (is_file($restartScript)) {
-        @exec('bash ' . escapeshellarg($restartScript) . ' ' . escapeshellarg($instanceId) . ' >/dev/null 2>&1');
-    }
-    echo json_encode([
-        'ok' => true,
-        'message' => 'Sessão reiniciada. Aguarde alguns minutos para o QR ser gerado.'
-    ]);
-    perf_log('ajax.qr_reset', ['status' => 'ok', 'instance' => $instanceId]);
-    exit;
-}
-
-// --- Carregar instâncias ---
+// --- Load instances & statuses ---
 perf_mark('instances.load.start');
 $instances = loadInstancesFromDatabase();
 perf_mark('instances.loaded', ['count' => count($instances)]);
@@ -1018,28 +96,6 @@ if ($isManager) {
     }, ARRAY_FILTER_USE_BOTH);
 }
 
-if (!function_exists('buildInstanceStatuses')) {
-    function buildInstanceStatuses(array $instances): array
-    {
-        $statuses = [];
-        $connectionStatuses = [];
-        foreach ($instances as $id => $inst) {
-            $port = $inst['port'] ?? null;
-            $status = $port && isPortOpen('localhost', $port) ? 'Running' : 'Stopped';
-            $statuses[$id] = $status;
-            debug_log("Status check for {$id} on port {$port}: {$status}");
-
-            $connStatus = strtolower($inst['connection_status'] ?? '');
-            if ($connStatus === '' && $status === 'Running') {
-                $connStatus = 'connected';
-            }
-            $connectionStatuses[$id] = $connStatus ?: 'disconnected';
-            debug_log("Connection status for {$id}: {$connectionStatuses[$id]}");
-        }
-        return [$statuses, $connectionStatuses];
-    }
-}
-
 perf_mark('statuses.build.start');
 list($statuses, $connectionStatuses) = buildInstanceStatuses($instances);
 perf_mark('statuses.built', ['count' => count($statuses)]);
@@ -1050,172 +106,7 @@ if ($dashboardBaseUrl === '') {
 $baseRedirectUrl = rtrim($dashboardBaseUrl, '/') . '/';
 $dashboardLogoUrl = buildPublicBaseUrl($dashboardBaseUrl . '/assets/maestro-logo.png');
 
-
-
-if (!function_exists('renderSidebarContent')) {
-    function renderSidebarContent(array $instances, ?string $selectedInstanceId, array $statuses, array $connectionStatuses, bool $showAdminControls = true)
-    {
-    global $dashboardBaseUrl, $dashboardLogoUrl;
-    $providerLabelMap = [
-        'openai' => 'OpenAI',
-        'gemini' => 'Gemini',
-        'openrouter' => 'OpenRouter'
-    ];
-    ?>
-    <div class="p-6 border-b border-mid">
-      <a href="<?= htmlspecialchars($dashboardBaseUrl) ?>" class="flex items-center gap-3 inline-flex group">
-        <div class="flex items-center justify-center h-12">
-          <img src="<?= htmlspecialchars($dashboardLogoUrl) ?>" width="56" style="height:auto;" alt="Logomarca Maestro">
-        </div>
-        <div>
-          <div class="text-lg font-semibold text-dark">Maestro</div>
-          <div class="text-xs text-slate-500">WhatsApp Orchestrator</div>
-        </div>
-      </a>
-
-      <?php if ($showAdminControls): ?>
-      <button onclick="openCreateModal()" class="mt-4 w-full px-4 py-2 rounded-xl bg-primary text-white font-medium hover:opacity-90 transition">
-        Nova instância
-      </button>
-      <button onclick="window.location.href='campanhas.php'" class="mt-3 w-full px-4 py-2 rounded-xl border border-primary text-primary font-medium hover:bg-primary/5 transition">
-        Campanhas
-      </button>
-      <button onclick="window.location.href='external_access.php'" class="mt-3 w-full px-4 py-2 rounded-xl border border-primary text-primary font-medium hover:bg-primary/5 transition">
-        Acessos
-      </button>
-      <?php endif; ?>
-
-      <input class="mt-4 w-full px-3 py-2 rounded-xl bg-light border border-mid text-sm"
-             placeholder="Buscar instância...">
-    </div>
-
-    <div class="p-3 space-y-2 flex-1 overflow-y-auto">
-      <div class="text-xs text-slate-500 px-2">INSTÂNCIAS</div>
-
-      <?php foreach ($instances as $id => $inst): ?>
-        <?php
-          $isSelected = $id === $selectedInstanceId;
-          $aiDetails = $inst['ai'] ?? [];
-          $rawProviderLabel = strtolower($aiDetails['provider'] ?? ($inst['openai']['mode'] ?? 'openai'));
-          $aiProviderLabel = $providerLabelMap[$rawProviderLabel] ?? ucfirst($rawProviderLabel);
-          $aiEnabledTag = !empty($aiDetails['enabled'] ?? $inst['openai']['enabled'] ?? false);
-          $secretaryDetails = $inst['secretary'] ?? [];
-          $secretaryEnabledTag = !empty($secretaryDetails['enabled']);
-          $quickReplies = $secretaryDetails['quick_replies'] ?? [];
-          if (empty($quickReplies)) {
-            $legacyTerm1 = trim((string)($secretaryDetails['term_1'] ?? ''));
-            $legacyResp1 = trim((string)($secretaryDetails['response_1'] ?? ''));
-            $legacyTerm2 = trim((string)($secretaryDetails['term_2'] ?? ''));
-            $legacyResp2 = trim((string)($secretaryDetails['response_2'] ?? ''));
-            if ($legacyTerm1 !== '' && $legacyResp1 !== '') {
-              $quickReplies[] = ['term' => $legacyTerm1, 'response' => $legacyResp1];
-            }
-            if ($legacyTerm2 !== '' && $legacyResp2 !== '') {
-              $quickReplies[] = ['term' => $legacyTerm2, 'response' => $legacyResp2];
-            }
-          }
-          $quickRepliesEnabledTag = !empty($quickReplies);
-          $transcriptionDetails = $inst['audio_transcription'] ?? [];
-          $transcriptionEnabledTag = !empty($transcriptionDetails['enabled']);
-          $serverRunning = $statuses[$id] === 'Running';
-          $whatsappConnected = strtolower($connectionStatuses[$id] ?? '') === 'connected';
-          $online = $serverRunning && $whatsappConnected;
-        ?>
-        <div class="instance-card <?= $isSelected ? 'is-selected' : '' ?>" data-instance-name="<?= htmlspecialchars(strtolower($inst['name'])) ?>">
-          <a href="?instance=<?= $id ?>" class="block">
-            <div class="instance-header">
-              <div class="instance-name font-semibold text-lg text-dark"><?= htmlspecialchars($inst['name']) ?></div>
-              <div class="instance-status-badge">
-                <?php if ($online): ?>
-                  <span class="badge-online">Online</span>
-                <?php else: ?>
-                  <span class="badge-offline">Offline</span>
-                <?php endif; ?>
-              </div>
-            </div>
-            <div class="instance-subheader">
-              <div class="text-xs text-slate-500">
-                WhatsApp: <?= $whatsappConnected ? 'conectado' : 'desconectado' ?>
-              </div>
-            </div>
-          </a>
-          <div class="instance-footer">
-            <div class="instance-icons">
-              <?php if ($transcriptionEnabledTag): ?>
-                <div class="status-icon" title="Transcrição: ativa">
-                  <svg class="w-4 h-4 text-green-600" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
-                  </svg>
-                </div>
-              <?php else: ?>
-                <div class="status-icon" title="Transcrição: desativada">
-                  <svg class="w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>
-                  </svg>
-                </div>
-              <?php endif; ?>
-              <?php if ($aiEnabledTag): ?>
-                <div class="status-icon" title="Respostas automáticas: ativas">
-                  <svg class="w-4 h-4 text-blue-600" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path>
-                  </svg>
-                </div>
-              <?php else: ?>
-                <div class="status-icon" title="Respostas automáticas: desativadas">
-                  <svg class="w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path>
-                  </svg>
-                </div>
-              <?php endif; ?>
-              <?php if ($whatsappConnected): ?>
-                <div class="status-icon" title="WhatsApp: conectado">
-                  <svg class="w-4 h-4 text-green-600" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893A11.821 11.821 0 0020.885 3.488"/>
-                  </svg>
-                </div>
-              <?php else: ?>
-                <div class="status-icon" title="WhatsApp: desconectado">
-                  <svg class="w-4 h-4 text-red-400" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893A11.821 11.821 0 0020.885 3.488"/>
-                  </svg>
-                </div>
-              <?php endif; ?>
-              <?php if ($aiEnabledTag): ?>
-                <div class="status-icon" title="IA: <?= htmlspecialchars($aiProviderLabel) ?>">
-                  <svg class="w-4 h-4 text-purple-600" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path>
-                  </svg>
-                </div>
-              <?php endif; ?>
-            </div>
-            <div class="instance-actions">
-              <a href="conversas.php?instance=<?= urlencode($id) ?>" class="action-btn">
-                <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
-                  <path d="M3 4.5A1.5 1.5 0 014.5 3h11A1.5 1.5 0 0117 4.5v6A1.5 1.5 0 0115.5 12H8l-4 4V4.5z"></path>
-                </svg>
-                Conversas
-              </a>
-              <a href="grupos.php?instance=<?= urlencode($id) ?>" class="action-btn">
-                <svg class="w-3.5 h-3.5" viewBox="0 0 20 20" fill="currentColor">
-                  <path d="M7 7a3 3 0 116 0v1h1a2 2 0 012 2v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5a2 2 0 012-2h1V7z"></path>
-                </svg>
-                Grupos
-              </a>
-            </div>
-          </div>
-        </div>
-      <?php endforeach; ?>
-
-    </div>
-
-    <div class="mt-auto p-6 border-t border-mid">
-      <button onclick="logout()" class="w-full text-left text-sm text-slate-500 hover:text-dark">Logout</button>
-      <div class="text-xs text-slate-500 mt-2">Maestro • MVP</div>
-    </div>
-    <?php
-    }
-}
-
+// --- Resolve selected instance ---
 $totalInstances = count($instances);
 $runningInstances = count(array_filter($statuses, fn($status) => $status === 'Running'));
 $connectedInstances = count(array_filter($connectionStatuses, fn($conn) => strtolower($conn) === 'connected'));
@@ -1224,46 +115,58 @@ $activePercent = $totalInstances ? round($runningInstances / $totalInstances * 1
 $connectedPercent = $totalInstances ? round($connectedInstances / $totalInstances * 100) : 0;
 $disconnectedPercent = $totalInstances ? round(max(0, $disconnectedInstances) / $totalInstances * 100) : 0;
 
-// Select instance early so handlers can reuse it
-$selectedInstanceId = $_GET['instance'] ?? null;
+$requestedInstanceId = trim((string)($_GET['instance'] ?? ($_POST['instance'] ?? '')));
+$selectedInstanceId = $requestedInstanceId !== '' ? $requestedInstanceId : null;
 if ($selectedInstanceId && !isset($sidebarInstances[$selectedInstanceId])) {
     $selectedInstanceId = null;
 }
 $selectedInstanceId = $selectedInstanceId ?? (array_key_first($sidebarInstances) ?: null);
 $selectedInstance = $sidebarInstances[$selectedInstanceId] ?? null;
+
+// --- AJAX handlers (each exits if matched) ---
+// Now called after $selectedInstance is resolved
+if (handleAjaxRequest()) exit;
+
+$webAccessBaseUrl = buildPublicBaseUrl('/web/');
+$webAccessUrl = $selectedInstanceId ? $webAccessBaseUrl . '?id=' . urlencode($selectedInstanceId) : null;
+$webEmbedSnippet = '';
+$webFloatingSnippet = '';
+if ($webAccessUrl) {
+    $encodedWebUrl = htmlspecialchars($webAccessUrl, ENT_QUOTES, 'UTF-8');
+    $webEmbedSnippet = <<<HTML
+<iframe src="$encodedWebUrl" width="420" height="720" style="border:0;border-radius:32px;box-shadow:0 20px 40px rgba(15,23,42,0.25);" loading="lazy" allow="microphone"></iframe>
+HTML;
+    $webFloatingSnippet = <<<HTML
+<div id="maestro-web-floating-chat" style="position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;align-items:flex-end;gap:0.5rem;">
+  <button id="maestroFloatingToggle" type="button" style="border:none;background:#2563eb;color:#fff;font-weight:600;padding:0.65rem 1.25rem;border-radius:999px;cursor:pointer;">Abrir chat</button>
+  <div id="maestroFloatingWrapper" style="display:none;width:360px;height:620px;border-radius:32px;overflow:hidden;box-shadow:0 20px 60px rgba(15,23,42,0.25);">
+    <iframe src="$encodedWebUrl" width="100%" height="100%" style="border:0;" allow="microphone"></iframe>
+  </div>
+</div>
+<script>
+(function () {
+  const toggle = document.getElementById('maestroFloatingToggle');
+  const wrapper = document.getElementById('maestroFloatingWrapper');
+  if (!toggle || !wrapper) {
+    return;
+  }
+  toggle.addEventListener('click', () => {
+    const isOpen = wrapper.style.display === 'block';
+    wrapper.style.display = isOpen ? 'none' : 'block';
+    toggle.textContent = isOpen ? 'Abrir chat' : 'Fechar chat';
+  });
+})();
+</script>
+HTML;
+}
 $selectedPhoneLabel = $selectedInstance ? formatInstancePhoneLabel($selectedInstance['phone'] ?? '') : '';
 
 $logRange = resolveLogRangeFromRequest();
 
-if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['export_conversations']) && isset($_GET['instance'])) {
-    $exportInstanceId = trim((string)$_GET['instance']);
-    if ($exportInstanceId === '' || !isset($sidebarInstances[$exportInstanceId])) {
-        http_response_code(404);
-        echo "Instância não encontrada para exportação.";
-        exit;
-    }
-    $rangeTag = 'hoje';
-    if ($logRange['preset'] === 'all') {
-        $rangeTag = 'total';
-    } elseif ($logRange['preset'] === 'yesterday') {
-        $rangeTag = 'ontem';
-    } elseif ($logRange['preset'] === 'custom') {
-        $startLabel = formatLogDateForFilename($logRange['start']) ?: 'inicio';
-        $endLabel = formatLogDateForFilename($logRange['end']) ?: 'fim';
-        $rangeTag = "{$startLabel}_{$endLabel}";
-    }
-    $filename = "conversas-{$exportInstanceId}-{$rangeTag}-" . date('Ymd-His') . ".txt";
-    header('Content-Type: text/plain; charset=utf-8');
-    header('Content-Disposition: attachment; filename="' . $filename . '"');
-    echo buildAllConversationsLog(
-        $exportInstanceId,
-        $sidebarInstances[$exportInstanceId] ?? [],
-        $logRange['start'],
-        $logRange['end']
-    );
-    exit;
-}
+// --- Action handlers (each exits if matched) ---
+if (handleActions()) exit;
 
+// --- Prepare data for rendering ---
 $logSummary = $selectedInstanceId ? getInstanceLogSummary($selectedInstanceId, $logRange['start'], $logRange['end']) : [
     'total_messages' => 0,
     'total_contacts' => 0,
@@ -1277,6 +180,9 @@ $logSummary = $selectedInstanceId ? getInstanceLogSummary($selectedInstanceId, $
     'last_message_at' => ''
 ];
 
+$baileysDebugLogs = getBaileysDebugLogs($selectedInstanceId);
+$baileysDebugPaths = buildBaileysLogPaths($selectedInstanceId);
+
 $logQueryParams = [
     'instance' => $selectedInstanceId ?? '',
     'log_range' => $logRange['preset'],
@@ -1286,7 +192,7 @@ $logQueryParams = [
 $exportLogUrl = $selectedInstanceId ? ('?' . http_build_query(array_merge($logQueryParams, ['export_conversations' => 1]))) : '#';
 
 $curlEndpointPort = $selectedInstance['port'] ?? 3010;
-$curlEndpoint = "http://127.0.0.1:{$curlEndpointPort}/send-message";
+$curlEndpoint = "http://127.0.0.1:{$curlEndpointPort}";
 $curlPayloadArray = [
     'to' => '5585999999999@s.whatsapp.net',
     'message' => 'Mensagem enviada via API'
@@ -1298,466 +204,59 @@ curl -X POST "{$curlEndpoint}" \\
   -d '{$curlPayload}'
 CURL;
 
-// Handle AJAX send-card requests
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['ajax_send'])) {
-    perf_mark('ajax.send.start');
-    header('Content-Type: application/json; charset=utf-8');
-    $payloadRaw = file_get_contents('php://input');
-    $payload = json_decode($payloadRaw, true);
-    if (!is_array($payload)) {
-        $payload = $_POST;
-    }
+// Video sending curl examples
+$curlVideoUrlPayload = json_encode([
+    'to' => '5585999999999@s.whatsapp.net',
+    'video_url' => 'https://example.com/video.mp4',
+    'caption' => 'Assista este vídeo!'
+], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+$sampleCurlVideoUrlCommand = <<<CURL
+curl -X POST "{$curlEndpoint}" \\
+  -H "Content-Type: application/json" \\
+  -d '{$curlVideoUrlPayload}'
+CURL;
 
-    $phone = trim($payload['phone'] ?? '');
-    $message = trim($payload['message'] ?? '');
+$curlVideoBase64Payload = json_encode([
+    'to' => '5585999999999@s.whatsapp.net',
+    'video_base64' => 'data:video/mp4;base64,AAAAHGZ0eXBpc29tAAAC...',
+    'caption' => 'Vídeo em base64'
+], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+$sampleCurlVideoBase64Command = <<<CURL
+curl -X POST "{$curlEndpoint}" \\
+  -H "Content-Type: application/json" \\
+  -d '{$curlVideoBase64Payload}'
+CURL;
 
-    if (!$selectedInstance) {
-        http_response_code(404);
-        echo json_encode(['ok' => false, 'error' => 'Instância não encontrada para envio']);
-        perf_log('ajax.send', ['status' => 'not_found']);
-        exit;
-    }
+$curlImageUrlPayload = json_encode([
+    'to' => '5585999999999@s.whatsapp.net',
+    'image_url' => 'https://example.com/image.jpg',
+    'caption' => 'Veja esta imagem!'
+], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+$sampleCurlImageUrlCommand = <<<CURL
+curl -X POST "{$curlEndpoint}" \\
+  -H "Content-Type: application/json" \\
+  -d '{$curlImageUrlPayload}'
+CURL;
 
-    if (!$phone || !$message) {
-        http_response_code(400);
-        echo json_encode(['ok' => false, 'error' => 'Telefone e mensagem são obrigatórios']);
-        perf_log('ajax.send', ['status' => 'invalid']);
-        exit;
-    }
+$curlAudioUrlPayload = json_encode([
+    'to' => '5585999999999@s.whatsapp.net',
+    'audio_url' => 'https://example.com/audio.mp3'
+], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+$sampleCurlAudioUrlCommand = <<<CURL
+curl -X POST "{$curlEndpoint}" \\
+  -H "Content-Type: application/json" \\
+  -d '{$curlAudioUrlPayload}'
+CURL;
 
-    debug_log("AJAX send-card request for {$selectedInstanceId}: phone={$phone}");
-    $sendUrl = "http://127.0.0.1:{$selectedInstance['port']}/send-message";
-    $ch = curl_init($sendUrl);
-    $body = json_encode(['to' => $phone, 'message' => $message]);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-    $response = curl_exec($ch);
-    $curlError = curl_error($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-
-    debug_log("AJAX send-card response ({$httpCode}) for {$selectedInstanceId}: {$response}");
-
-    $responsePayload = json_decode($response, true);
-    if ($curlError) {
-        http_response_code(500);
-        echo json_encode(['ok' => false, 'error' => "Falha ao enviar mensagem: {$curlError}"]);
-        perf_log('ajax.send', ['status' => 'curl_error']);
-        exit;
-    }
-
-    if (!$responsePayload || !isset($responsePayload['ok']) || !$responsePayload['ok'] || $httpCode >= 400) {
-        $errorMessage = $responsePayload['error'] ?? ($responsePayload['detail'] ?? "Erro HTTP {$httpCode}");
-        http_response_code($httpCode >= 400 ? $httpCode : 500);
-        echo json_encode(['ok' => false, 'error' => $errorMessage]);
-        perf_log('ajax.send', ['status' => 'error', 'http' => $httpCode]);
-        exit;
-    }
-
-    echo json_encode([
-        'ok' => true,
-        'message' => 'Mensagem encaminhada com sucesso',
-        'remoteJid' => $responsePayload['to'] ?? null,
-        'apiResponse' => $responsePayload
-    ]);
-    perf_log('ajax.send', ['status' => 'ok']);
-    exit;
-}
-
-if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['ajax_history'])) {
-    perf_mark('ajax.history.start');
-    header('Content-Type: application/json; charset=utf-8');
-    if (!$selectedInstance) {
-        http_response_code(404);
-        echo json_encode(['ok' => false, 'error' => 'Instância não encontrada']);
-        perf_log('ajax.history', ['status' => 'not_found']);
-        exit;
-    }
-
-    $nodeEndpoint = "http://127.0.0.1:{$selectedInstance['port']}/api/chats/{$selectedInstanceId}?limit=12";
-    $nodeChats = null;
-    $nodeRaw = '';
-    $nodeHttpCode = 0;
-    $nodeError = '';
-
-    try {
-        $ch = curl_init($nodeEndpoint);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 3);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, ['Accept: application/json']);
-        $nodeRaw = curl_exec($ch);
-        $nodeError = curl_error($ch);
-        $nodeHttpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-        debug_log("AJAX history request to {$nodeEndpoint} returned {$nodeHttpCode}");
-        if (!$nodeError && $nodeHttpCode < 400) {
-            $decoded = json_decode($nodeRaw, true);
-            if (is_array($decoded) && !empty($decoded['ok']) && is_array($decoded['chats'])) {
-                $nodeChats = $decoded['chats'];
-                echo json_encode([
-                    'ok' => true,
-                    'instanceId' => $selectedInstanceId,
-                    'source' => 'node',
-                    'chats' => $nodeChats
-                ]);
-                perf_log('ajax.history', ['status' => 'ok', 'source' => 'node', 'rows' => count($nodeChats)]);
-                exit;
-            }
-            debug_log("AJAX history node response not usable: " . ($nodeRaw ?: 'empty'));
-        } else {
-            debug_log("AJAX history node curl error: {$nodeError}");
-        }
-    } catch (Exception $err) {
-        debug_log("AJAX history node exception: " . $err->getMessage());
-    }
-
-    try {
-        $chats = fetchChatHistory($selectedInstanceId, 10);
-        echo json_encode([
-            'ok' => true,
-            'instanceId' => $selectedInstanceId,
-            'source' => 'sqlite',
-            'chats' => $chats
-        ]);
-        perf_log('ajax.history', ['status' => 'ok', 'source' => 'sqlite', 'rows' => count($chats)]);
-    } catch (Exception $err) {
-        http_response_code(500);
-        echo json_encode(['ok' => false, 'error' => 'Erro ao ler histórico']);
-        perf_log('ajax.history', ['status' => 'error']);
-    }
-    exit;
-}
-
-if ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['ajax_average_taxar'])) {
-    perf_mark('ajax.average_taxar.start');
-    header('Content-Type: application/json; charset=utf-8');
-    if (!$selectedInstance) {
-        http_response_code(404);
-        echo json_encode(['ok' => false, 'error' => 'Instância não encontrada']);
-        perf_log('ajax.average_taxar', ['status' => 'not_found']);
-        exit;
-    }
-
-    $dbPath = __DIR__ . '/chat_data.db';
-    if (!file_exists($dbPath)) {
-        http_response_code(500);
-        echo json_encode(['ok' => false, 'error' => 'Banco de dados indisponível']);
-        perf_log('ajax.average_taxar', ['status' => 'db_not_found']);
-        exit;
-    }
-    $db = new SQLite3($dbPath, SQLITE3_OPEN_READONLY);
-
-    // Get all remote_jids for the instance
-    $stmt = $db->prepare("SELECT DISTINCT remote_jid FROM messages WHERE instance_id = :instance");
-    $stmt->bindValue(':instance', $selectedInstanceId, SQLITE3_TEXT);
-    $result = $stmt->execute();
-
-    $remoteJids = [];
-    while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-        $remoteJids[] = $row['remote_jid'];
-    }
-    $result->finalize();
-    $stmt->close();
-
-    $totalTaxar = 0;
-    $validTaxarCount = 0;
-
-    foreach ($remoteJids as $remoteJid) {
-        $inboundStmt = $db->prepare("SELECT COUNT(id) as count FROM messages WHERE instance_id = :instance AND remote_jid = :remote AND direction = 'inbound'");
-        $inboundStmt->bindValue(':instance', $selectedInstanceId, SQLITE3_TEXT);
-        $inboundStmt->bindValue(':remote', $remoteJid, SQLITE3_TEXT);
-        $inboundCount = (int)$inboundStmt->execute()->fetchArray(SQLITE3_ASSOC)['count'];
-        $inboundStmt->close();
-
-        $outboundStmt = $db->prepare("SELECT COUNT(id) as count FROM messages WHERE instance_id = :instance AND remote_jid = :remote AND direction = 'outbound'");
-        $outboundStmt->bindValue(':instance', $selectedInstanceId, SQLITE3_TEXT);
-        $outboundStmt->bindValue(':remote', $remoteJid, SQLITE3_TEXT);
-        $outboundCount = (int)$outboundStmt->execute()->fetchArray(SQLITE3_ASSOC)['count'];
-        $outboundStmt->close();
-
-        if ($outboundCount > 0) {
-            $taxar = ($inboundCount / $outboundCount) * 100;
-            $totalTaxar += $taxar;
-            $validTaxarCount++;
-        }
-    }
-    $db->close();
-
-    $averageTaxar = $validTaxarCount > 0 ? $totalTaxar / $validTaxarCount : 0;
-
-    echo json_encode([
-        'ok' => true,
-        'instanceId' => $selectedInstanceId,
-        'average_taxar' => round($averageTaxar, 2)
-    ]);
-    perf_log('ajax.average_taxar', ['status' => 'ok', 'average_taxar' => $averageTaxar]);
-    exit;
-}
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_GET['ajax_ai_test'])) {
-    perf_mark('ajax.ai_test.start');
-    if (!$selectedInstance) {
-        http_response_code(404);
-        echo json_encode(['ok' => false, 'error' => 'Instância não encontrada']);
-        perf_log('ajax.ai_test', ['status' => 'not_found']);
-        exit;
-    }
-
-    $payload = $_POST;
-    if (empty($payload)) {
-        $dataRaw = file_get_contents('php://input');
-        $payload = json_decode($dataRaw, true);
-        if (!is_array($payload)) {
-            $payload = [];
-        }
-    }
-
-    $userMessage = trim($payload['message'] ?? '');
-    $remoteJid = trim($payload['remote_jid'] ?? '');
-    if (!$userMessage) {
-        http_response_code(400);
-        echo json_encode(['ok' => false, 'error' => 'Mensagem é obrigatória']);
-        perf_log('ajax.ai_test', ['status' => 'invalid']);
-        exit;
-    }
-
-    $nodeBody = ['message' => $userMessage];
-    if ($remoteJid) {
-        $nodeBody['remote_jid'] = $remoteJid;
-    }
-
-    $nodeUrl = "http://127.0.0.1:{$selectedInstance['port']}/api/ai-test";
-    $ch = curl_init($nodeUrl);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($nodeBody));
-    $resp = curl_exec($ch);
-    $err = curl_error($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-
-    if ($err) {
-        http_response_code(500);
-        echo json_encode(['ok' => false, 'error' => "Erro ao testar IA: {$err}"]);
-        perf_log('ajax.ai_test', ['status' => 'curl_error']);
-        exit;
-    }
-
-    $result = json_decode($resp, true);
-    $isValidJson = is_array($result);
-    if ($httpCode >= 400 || !$isValidJson) {
-        http_response_code($httpCode >= 400 ? $httpCode : 500);
-        $message = $isValidJson ? ($result['error'] ?? 'Resposta inválida do servidor AI') : 'Resposta inválida do servidor AI';
-        $rawPayload = $isValidJson ? $result : trim($resp ?: '');
-        echo json_encode(['ok' => false, 'error' => $message, 'raw' => $rawPayload]);
-        perf_log('ajax.ai_test', ['status' => 'error', 'http' => $httpCode]);
-        exit;
-    }
-
-    echo json_encode($result);
-    perf_log('ajax.ai_test', ['status' => 'ok']);
-    exit;
-}
-
-// --- Criar nova instância ---
-if (isset($_POST['create'])) {
-    debug_log('Creating new instance: name=' . $_POST['name']);
-    $nextPort = 3010 + count($instances) + 1;
-
-    $id = uniqid("inst_");
-    $apiKey = bin2hex(random_bytes(16));
-
-    $newEntry = [
-        "name" => $_POST["name"],
-        "port" => $nextPort,
-        "api_key" => $apiKey,
-        "status" => "stopped",
-        "connection_status" => "disconnected",
-        "base_url" => "http://127.0.0.1:{$nextPort}",
-        "phone" => null
-];
-
-
-    $sqlResult = upsertInstanceRecordToSql($id, $newEntry);
-    if (!$sqlResult['ok']) {
-        debug_log('Falha ao gravar instância no SQLite: ' . $sqlResult['message']);
-    } else {
-        debug_log('Instância persistida no SQLite: ' . $id);
-    }
-    exec("bash create_instance.sh {$id} {$nextPort} >/dev/null 2>&1 &");
-    debug_log('Executed create_instance.sh for ' . $id . ' on port ' . $nextPort);
-
-    debug_log('Redirecting to /api/envio/wpp/ after create');
-    header("Location: " . $baseRedirectUrl);
-    exit;
-}
-
-// --- Ações ---
-if (isset($_GET["delete"])) {
-    $deleteId = $_GET["delete"];
-    debug_log('Deleting instance: ' . $deleteId);
-    $deletedFromSql = deleteInstanceRecordFromSql($deleteId);
-    $markerPath = __DIR__ . '/deleted_instances.txt';
-    file_put_contents($markerPath, $deleteId . PHP_EOL, FILE_APPEND | LOCK_EX);
-    if ($deletedFromSql) {
-        debug_log('Instance removed from SQLite: ' . $deleteId);
-    } else {
-        debug_log('Instance could not be removed from SQLite (maybe missing): ' . $deleteId);
-    }
-    debug_log('Redirecting to /api/envio/wpp/ after delete');
-    header("Location: " . $baseRedirectUrl);
-    exit;
-}
-
-function fetchInstanceQrImageUrl(string $instanceId): array
-{
-    $instance = loadInstanceRecordFromDatabase($instanceId);
-    if (!$instance) {
-        return ['ok' => false, 'status' => 404, 'error' => 'Instância não encontrada'];
-    }
-
-    $port = $instance['port'] ?? null;
-    if (!$port) {
-        return ['ok' => false, 'status' => 400, 'error' => 'Porta da instância não configurada'];
-    }
-
-    $url = "http://127.0.0.1:{$port}/qr";
-    $ch = curl_init($url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
-    $response = curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $error = curl_error($ch);
-    curl_close($ch);
-
-    if ($error) {
-        return ['ok' => false, 'status' => 503, 'error' => "Erro de rede: {$error}"];
-    }
-
-    if ($httpCode !== 200 || !$response) {
-        $statusCode = $httpCode ?: 502;
-        $errorMessage = "QR request retornou código HTTP {$httpCode}";
-        if ($httpCode === 404) {
-            $errorMessage = "QR ainda não disponível";
-        }
-        return [
-            'ok' => false,
-            'status' => $statusCode,
-            'error' => $errorMessage
-        ];
-    }
-
-    $data = json_decode($response, true);
-    if (!$data || !isset($data['qr'])) {
-        return ['ok' => false, 'status' => 502, 'error' => 'Resposta QR inválida'];
-    }
-
-    $qrImageUrl = "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=" . urlencode($data['qr']);
-    return [
-        'ok' => true,
-        'status' => 200,
-        'qr_url' => $qrImageUrl,
-        'qr_data' => $data['qr']
-    ];
-}
-
-if (isset($_GET["qr"])) {
-    debug_log('QR requested for instance: ' . $_GET['qr']);
-    $instanceId = $_GET['qr'];
-    $qrResult = fetchInstanceQrImageUrl($instanceId);
-
-    if (!$qrResult['ok']) {
-        $code = $qrResult['status'] ?? 500;
-        debug_log("QR request failed: {$qrResult['error']} (code: {$code})");
-        http_response_code($code);
-        exit;
-    }
-
-    header("Location: {$qrResult['qr_url']}");
-    exit;
-}
-
-if (isset($_GET['qr_data'])) {
-    header('Content-Type: application/json; charset=utf-8');
-    $instanceId = $_GET['qr_data'];
-    $qrResult = fetchInstanceQrImageUrl($instanceId);
-
-    if ($qrResult['ok']) {
-        http_response_code(200);
-        echo json_encode(['ok' => true, 'qr_url' => $qrResult['qr_url']]);
-        exit;
-    }
-
-    $code = $qrResult['status'] ?? 500;
-    debug_log("QR data request failed: {$qrResult['error']} (code: {$code})");
-    http_response_code($code);
-    echo json_encode(['ok' => false, 'error' => $qrResult['error']]);
-    exit;
-}
-
-if (isset($_POST["disconnect"])) {
-    debug_log('Disconnecting instance: ' . $_POST['disconnect']);
-    $id = $_POST["disconnect"];
-    if (isset($instances[$id])) {
-        $port = $instances[$id]['port'] ?? null;
-        if ($port) {
-            $url = "http://127.0.0.1:{$port}/disconnect";
-            $ch = curl_init($url);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 8);
-            $response = curl_exec($ch);
-            $error = curl_error($ch);
-            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
-            if ($error || $httpCode < 200 || $httpCode >= 300) {
-                debug_log("Disconnect API failed: " . ($error ?: "HTTP {$httpCode}") . " response=" . ($response ?: 'empty'));
-            } else {
-                debug_log('Disconnect API success for ' . $id);
-            }
-        } else {
-            debug_log('Disconnect requested but port not found for ' . $id);
-        }
-    }
-    header("Location: " . $baseRedirectUrl);
-    exit;
-}
-
-if (isset($_GET['logout'])) {
-    debug_log('Logout requested');
-    session_destroy();
-    header("Location: " . $baseRedirectUrl);
-    exit;
-}
-
-if (isset($_POST["send"]) && $selectedInstance) {
-    debug_log('Sending message for instance: ' . $selectedInstanceId);
-    $phone = $_POST['phone'];
-    $message = $_POST['message'];
-    $url = "http://127.0.0.1:{$selectedInstance['port']}/send";
-    $data = json_encode(['phone' => $phone, 'message' => $message]);
-    $ch = curl_init($url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-    $response = curl_exec($ch);
-    $error = curl_error($ch);
-    curl_close($ch);
-    if ($error) {
-        debug_log("Send failed: $error");
-        $sendError = "Erro ao enviar: $error";
-    } else {
-        debug_log("Send response: $response");
-        $sendSuccess = "Mensagem enviada com sucesso!";
-    }
-    // Redirect to avoid resubmit
-    header("Location: ?instance=$selectedInstanceId");
-    exit;
-}
+$curlAudioBase64Payload = json_encode([
+    'to' => '5585999999999@s.whatsapp.net',
+    'audio_base64' => 'data:audio/mp3;base64,SUQzBAAAAA...'
+], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+$sampleCurlAudioBase64Command = <<<CURL
+curl -X POST "{$curlEndpoint}" \\
+  -H "Content-Type: application/json" \\
+  -d '{$curlAudioBase64Payload}'
+CURL;
 
 $assetUploadMessage = '';
 $assetUploadError = '';
@@ -1776,94 +275,6 @@ $quickConfigMessage = '';
 $quickConfigError = '';
 $quickConfigWarning = '';
 
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_instance']) && $selectedInstance) {
-    $newName = trim($_POST['instance_name'] ?? '');
-    $submittedBaseUrl = null;
-    if (isset($_POST['instance_base_url_b64'])) {
-        $decoded = base64_decode((string)$_POST['instance_base_url_b64'], true);
-        if ($decoded !== false) {
-            $submittedBaseUrl = trim($decoded);
-        }
-    }
-    if ($submittedBaseUrl === null && isset($_POST['instance_base_url'])) {
-        $submittedBaseUrl = trim($_POST['instance_base_url']);
-    }
-
-    $integrationType = in_array($_POST['integration_type'] ?? 'baileys', ['baileys', 'meta', 'web']) ? $_POST['integration_type'] : 'baileys';
-    $metaAccessToken = trim($_POST['meta_access_token'] ?? '');
-    $metaBusinessAccountId = trim($_POST['meta_business_account_id'] ?? '');
-    $metaTelephoneId = trim($_POST['meta_telephone_id'] ?? '');
-
-    if ($newName === '') {
-        $quickConfigError = 'Nome da instância é obrigatório.';
-    } else {
-        $resolvedBaseUrl = $submittedBaseUrl ?: ($selectedInstance['base_url'] ?? ("http://127.0.0.1:{$selectedInstance['port']}"));
-        $updatePayload = [
-            'name' => $newName,
-            'base_url' => $resolvedBaseUrl,
-            'integration_type' => $integrationType,
-            'port' => $selectedInstance['port'] ?? null,
-            'api_key' => $selectedInstance['api_key'] ?? null,
-            'status' => $selectedInstance['status'] ?? null,
-            'connection_status' => $selectedInstance['connection_status'] ?? null,
-            'phone' => $selectedInstance['phone'] ?? null
-        ];
-        $updateResult = upsertInstanceRecordToSql($selectedInstanceId, $updatePayload);
-        
-        // Save Meta API settings to settings table
-        $saveSettingsResult = saveInstanceSettings($selectedInstanceId, [
-            'meta_access_token' => $metaAccessToken,
-            'meta_business_account_id' => $metaBusinessAccountId,
-            'meta_telephone_id' => $metaTelephoneId
-        ]);
-        
-        if (!$updateResult['ok'] || !$saveSettingsResult['ok']) {
-            $quickConfigError = 'Falha ao salvar configurações: ' . ($updateResult['message'] ?: $saveSettingsResult['message']);
-            debug_log('AI config quick save failed: ' . ($updateResult['message'] ?: $saveSettingsResult['message']));
-        } else {
-            $instances = loadInstancesFromDatabase();
-            list($statuses, $connectionStatuses) = buildInstanceStatuses($instances);
-            $selectedInstance = $instances[$selectedInstanceId] ?? null;
-            $nodeSyncError = '';
-            $nodePort = isset($selectedInstance['port']) ? (int)$selectedInstance['port'] : null;
-            if ($selectedInstance && $nodePort) {
-                $nodePayload = [
-                    'name' => $newName,
-                    'base_url' => $resolvedBaseUrl,
-                    'port' => $nodePort,
-                    'api_key' => $selectedInstance['api_key'] ?? null,
-                    'phone' => $selectedInstance['phone'] ?? null
-                ];
-                $nodeUrl = "http://127.0.0.1:{$nodePort}/api/instance?instance=" . urlencode($selectedInstanceId);
-                $ch = curl_init($nodeUrl);
-                curl_setopt($ch, CURLOPT_POST, true);
-                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-                curl_setopt($ch, CURLOPT_HTTPHEADER, ["Content-Type: application/json"]);
-                curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($nodePayload));
-                curl_setopt($ch, CURLOPT_TIMEOUT, 5);
-                $nodeResp = curl_exec($ch);
-                $nodeErr = curl_error($ch);
-                $nodeCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-                curl_close($ch);
-                if ($nodeErr) {
-                    $nodeSyncError = $nodeErr;
-                } elseif ($nodeCode < 200 || $nodeCode >= 300) {
-                    $decodedNodeResp = json_decode($nodeResp, true);
-                    $nodeSyncError = $decodedNodeResp['error'] ?? trim($nodeResp ?: "HTTP {$nodeCode}");
-                }
-            }
-            if ($nodeSyncError) {
-                debug_log('Quick config node sync failed: ' . $nodeSyncError);
-            }
-            $quickConfigMessage = 'Configurações salvas com sucesso.';
-            // Force page reload to update UI with new instance data
-            header("Location: ?instance=$selectedInstanceId");
-            exit;
-        }
-    }
-}
-
 perf_mark('render.ready', [
     'instance' => $selectedInstanceId ?? '',
     'instances' => count($instances),
@@ -1874,6 +285,7 @@ perf_log('index.php render', [
     'memory_mb' => round(memory_get_usage(true) / 1024 / 1024, 2)
 ]);
 
+// --- Render HTML (views) ---
 ?>
 <!doctype html>
 <html lang="pt-br">
@@ -1905,265 +317,12 @@ perf_log('index.php render', [
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/intro.js/minified/introjs.min.css">
-
-  <style>
-    html, body { font-family: Inter, system-ui, sans-serif; }
-
-    .gemini-instruction-expanded {
-      position: fixed;
-      inset: 24px;
-      z-index: 60;
-      background: #ffffff;
-      padding: 16px;
-      border-radius: 20px;
-      border: 1px solid #CBD5E1;
-      box-shadow: 0 24px 48px rgba(15, 23, 42, 0.2);
-      display: flex;
-      flex-direction: column;
-    }
-
-    .gemini-instruction-expanded textarea {
-      flex: 1;
-      min-height: 60vh;
-    }
-
-    body.gemini-instruction-lock {
-      overflow: hidden;
-    }
-    body { overflow-x: hidden; }
-    .min-h-screen.flex { min-width: 0; }
-    main { min-width: 0; }
-    .grid { min-width: 0; }
-    .tour-help-button {
-      position: fixed;
-      right: 24px;
-      bottom: 24px;
-      width: 52px;
-      height: 52px;
-      border-radius: 999px;
-      background: #2563EB;
-      color: #fff;
-      box-shadow: 0 14px 28px rgba(15, 23, 42, 0.22);
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 22px;
-      font-weight: 700;
-      border: none;
-      cursor: pointer;
-      z-index: 60;
-    }
-    .tour-help-button:hover {
-      filter: brightness(0.95);
-    }
-    .tour-help-button:focus-visible {
-      outline: 2px solid #1D4ED8;
-      outline-offset: 3px;
-    }
-
-    .instance-card {
-      position: relative;
-      border: 1px solid rgba(148, 163, 184, 0.35);
-      padding: 2.25rem 0.75rem 0.75rem 0.75rem;
-      background: rgba(255, 255, 255, 0.9);
-      box-shadow: 0 4px 8px rgba(15, 23, 42, 0.08);
-      border-radius: 12px;
-      transition: all 0.2s ease;
-    }
-    .instance-card.is-selected {
-      background: rgba(37, 99, 235, 0.05);
-      border-color: rgba(37, 99, 235, 0.2);
-      box-shadow: 0 8px 16px rgba(15, 23, 42, 0.12);
-    }
-    .action-btn {
-      font-size: 0.75rem;
-      padding: 0.25rem 0.5rem;
-      border-radius: 999px;
-      border: 1px solid rgba(148, 163, 184, 0.5);
-      background: transparent;
-      color: #475569;
-      text-decoration: none;
-      transition: all 0.2s ease;
-      display: inline-flex;
-      align-items: center;
-      gap: 0.25rem;
-    }
-    .action-btn:hover {
-      background: rgba(15, 23, 42, 0.05);
-      color: #1e293b;
-    }
-    .instance-icons {
-      position: absolute;
-      top: 10px;
-      right: 10px;
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-    }
-    .ai-corner {
-      width: 24px;
-      height: 24px;
-      border-radius: 999px;
-      background: rgba(15, 23, 42, 0.08);
-      color: #0f172a;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .feature-badge {
-      font-size: 16px;
-      line-height: 1;
-      filter: drop-shadow(0 4px 8px rgba(15, 23, 42, 0.15));
-    }
-    .instance-sticky-header {
-      position: sticky;
-      top: 0;
-      z-index: 40;
-      background: rgba(241, 245, 249, 0.96);
-      border: 1px solid #e2e8f0;
-      border-radius: 16px;
-      padding: 10px 16px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
-      backdrop-filter: blur(8px);
-    }
-    .quick-reply-overlay {
-      position: fixed;
-      inset: 0;
-      z-index: 80;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      background: rgba(15, 23, 42, 0.55);
-      backdrop-filter: blur(4px);
-      padding: 24px;
-    }
-    .quick-reply-overlay.active {
-      display: flex;
-    }
-    .quick-reply-panel {
-      width: min(720px, 92vw);
-      background: #fff;
-      border-radius: 18px;
-      border: 1px solid #e2e8f0;
-      box-shadow: 0 20px 40px rgba(15, 23, 42, 0.25);
-      padding: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-    .quick-reply-panel textarea {
-      min-height: 40vh;
-    }
-    .prompt-overlay {
-      position: fixed;
-      inset: 0;
-      z-index: 85;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      background: rgba(15, 23, 42, 0.55);
-      backdrop-filter: blur(4px);
-      padding: 24px;
-    }
-    .prompt-overlay.active {
-      display: flex;
-    }
-    .prompt-panel {
-      width: min(760px, 92vw);
-      background: #fff;
-      border-radius: 18px;
-      border: 1px solid #e2e8f0;
-      box-shadow: 0 20px 40px rgba(15, 23, 42, 0.25);
-      padding: 16px;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-    .prompt-panel textarea {
-      min-height: 45vh;
-    }
-    .card-soft {
-      border-radius: 32px;
-      border: 1px solid rgba(148, 163, 184, 0.35);
-      background: rgba(255, 255, 255, 0.92);
-      box-shadow: 0 20px 40px rgba(15, 23, 42, 0.08);
-    }
-    .tabs-shell {
-      border-radius: 32px;
-      border: 1px solid rgba(148, 163, 184, 0.25);
-      padding: 1.5rem;
-      background: rgba(248, 250, 252, 0.9);
-      box-shadow: 0 30px 60px rgba(15, 23, 42, 0.12);
-    }
-    .tab-button {
-      border-radius: 999px;
-      border: 1px solid transparent;
-      padding: 0.6rem 1.2rem;
-      font-size: 0.85rem;
-      font-weight: 600;
-      transition: all 0.2s ease;
-      background: transparent;
-      color: #475569;
-    }
-    .tab-button.active {
-      background: #1d4ed8;
-      border-color: rgba(37, 99, 235, 0.6);
-      color: #fff;
-      box-shadow: 0 10px 30px rgba(37, 99, 235, 0.35);
-    }
-    .tab-pane {
-      display: none;
-    }
-    .tab-pane.active {
-      display: block;
-    }
-    .stat-card {
-      border-radius: 24px;
-      background: #0f172a;
-      color: #fff;
-      padding: 1.25rem;
-      box-shadow: 0 20px 40px rgba(15, 23, 42, 0.3);
-    }
-    .stat-card strong {
-      font-size: 2.25rem;
-      display: block;
-    }
-    .badge-pill {
-      border-radius: 999px;
-      padding: 0.25rem 0.85rem;
-      font-size: 0.75rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-    .badge-pill.server {
-      background: rgba(37, 99, 235, 0.15);
-      color: #1d4ed8;
-    }
-    .badge-pill.connection {
-      background: rgba(34, 197, 94, 0.15);
-      color: #16a34a;
-    }
-    .badge-pill.disconnect {
-      background: rgba(239, 68, 68, 0.15);
-      color: #dc2626;
-    }
-    .editor-shell {
-      border-radius: 24px;
-      border: 1px solid rgba(148, 163, 184, 0.35);
-      background: #f8fafc;
-      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-      font-size: 0.95rem;
-      padding: 1rem;
-      color: #111827;
-      min-height: 160px;
-    }
-  </style>
+  <link rel="stylesheet" href="assets/css/dashboard.css">
 </head>
+
+<script>
+  window.APP_TIMEZONE = <?= json_encode(getApplicationTimezone()) ?>;
+</script>
 
 <body class="bg-light text-dark">
   <div class="min-h-screen flex">
@@ -2252,7 +411,7 @@ perf_log('index.php render', [
         </div>
         <div class="flex flex-col gap-3 items-start lg:items-end">
           <div class="flex flex-wrap gap-2">
-            <button id="saveChangesButton" class="px-4 py-2 rounded-[18px] bg-primary text-white font-semibold hover:opacity-90 transition">Salvar alterações</button>
+            <button id="saveChangesButton" onclick="document.getElementById('quickConfigForm').submit()" class="px-4 py-2 rounded-[18px] bg-primary text-white font-semibold hover:opacity-90 transition">Salvar alterações</button>
             <?php if ($selectedInstance): ?>
               <a id="deleteInstanceButton" href="?delete=<?= $selectedInstanceId ?>" onclick="return confirm('Tem certeza?')" class="px-4 py-2 rounded-[18px] border border-red-300 text-red-600 font-semibold hover:bg-red-50 transition">Deletar</a>
             <?php endif; ?>
@@ -2272,6 +431,7 @@ perf_log('index.php render', [
         </div>
       </div>
     </section>
+
     <!-- Tabs -->
     <div class="tabs-shell mt-6">
         <div class="flex flex-wrap gap-3 border-b border-slate-200 pb-3">
@@ -2283,1200 +443,29 @@ perf_log('index.php render', [
         <?php if ($quickConfigIntegrationType === 'meta'): ?>
         <button type="button" data-tab-target="tab-templates" class="tab-button" id="templatesTab">Templates</button>
         <?php endif; ?>
+        <button type="button" data-tab-target="tab-web-access" class="tab-button">Acesso Web</button>
+        <button type="button" data-tab-target="tab-monitoramento" class="tab-button">Status</button>
+        <button type="button" data-tab-target="tab-api" class="tab-button">API</button>
       </div>
       <div class="tab-contents mt-6 space-y-6">
         <?php if ($quickConfigIntegrationType === 'meta'): ?>
-        <div data-tab-pane="tab-templates" class="tab-pane space-y-6">
-          <div class="flex items-center justify-between mb-4">
-            <div>
-              <div class="text-lg font-semibold text-dark">Templates WhatsApp</div>
-              <p class="text-sm text-slate-500">Gerencie templates de mensagem para a API do Meta</p>
-            </div>
-            <button id="refreshTemplatesBtn" type="button" class="px-4 py-2 rounded-xl bg-primary text-white font-medium hover:opacity-90">
-              Atualizar Status
-            </button>
-          </div>
-
-          <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <!-- Approved Templates -->
-            <div class="lg:col-span-1 bg-white border border-mid rounded-2xl p-6 card-soft">
-              <div class="font-medium mb-4 flex items-center gap-2">
-                <div class="w-3 h-3 bg-green-500 rounded-full"></div>
-                Templates Aprovados
-              </div>
-              <div id="approvedTemplatesList" class="space-y-3">
-                <div class="text-xs text-slate-500">Carregando...</div>
-              </div>
-            </div>
-
-            <!-- Test Send -->
-            <div class="lg:col-span-1 bg-white border border-mid rounded-2xl p-6 card-soft">
-              <div class="font-medium mb-4 flex items-center gap-2">
-                <div class="w-3 h-3 bg-blue-500 rounded-full"></div>
-                Envio de Teste
-              </div>
-              <form id="testSendForm" class="space-y-4">
-                <div>
-                  <label class="text-xs text-slate-500">Template</label>
-                  <select id="testTemplateSelect" name="template_name" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light" required>
-                    <option value="">Selecione um template...</option>
-                  </select>
-                </div>
-                <div>
-                  <label class="text-xs text-slate-500">Número de destino</label>
-                  <input type="text" id="testPhoneInput" name="to" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light" placeholder="5585999999999" required>
-                </div>
-                <div id="testVariablesContainer" class="space-y-2">
-                  <!-- Variables will be added dynamically -->
-                </div>
-                <button type="submit" id="testSendBtn" class="px-4 py-2 rounded-xl bg-primary text-white font-medium hover:opacity-90">
-                  Enviar Teste
-                </button>
-                <div id="testSendStatus" class="text-sm text-slate-500">&nbsp;</div>
-              </form>
-            </div>
-
-            <!-- Bulk Send -->
-            <div class="lg:col-span-1 bg-white border border-mid rounded-2xl p-6 card-soft">
-              <div class="font-medium mb-4 flex items-center gap-2">
-                <div class="w-3 h-3 bg-purple-500 rounded-full"></div>
-                Envio em Massa
-              </div>
-              <form id="bulkSendForm" class="space-y-4">
-                <div>
-                  <label class="text-xs text-slate-500">Template</label>
-                  <select id="bulkTemplateSelect" name="template_name" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light" required>
-                    <option value="">Selecione um template...</option>
-                  </select>
-                </div>
-                <div>
-                  <label class="text-xs text-slate-500">Lista de números (um por linha)</label>
-                  <textarea id="bulkPhonesTextarea" name="recipients" rows="4" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light" placeholder="5585999999999&#10;5585988888888&#10;5585977777777" required></textarea>
-                </div>
-                <div id="bulkVariablesContainer" class="space-y-2">
-                  <!-- Variables will be added dynamically -->
-                </div>
-                <button type="submit" id="bulkSendBtn" class="px-4 py-2 rounded-xl bg-primary text-white font-medium hover:opacity-90">
-                  Enviar em Massa
-                </button>
-                <div id="bulkSendStatus" class="text-sm text-slate-500">&nbsp;</div>
-              </form>
-            </div>
-          </div>
-
-            <!-- Pending Templates -->
-            <div class="lg:col-span-1 bg-white border border-mid rounded-2xl p-6 card-soft">
-              <div class="font-medium mb-4 flex items-center gap-2">
-                <div class="w-3 h-3 bg-yellow-500 rounded-full"></div>
-                Templates Pendentes
-              </div>
-              <div id="pendingTemplatesList" class="space-y-3">
-                <div class="text-xs text-slate-500">Carregando...</div>
-              </div>
-            </div>
-
-            <!-- Rejected Templates -->
-            <div class="lg:col-span-1 bg-white border border-mid rounded-2xl p-6 card-soft">
-              <div class="font-medium mb-4 flex items-center gap-2">
-                <div class="w-3 h-3 bg-red-500 rounded-full"></div>
-                Templates Rejeitados
-              </div>
-              <div id="rejectedTemplatesList" class="space-y-3">
-                <div class="text-xs text-slate-500">Carregando...</div>
-              </div>
-            </div>
-          </div>
-
-        </div>
+          <?php renderTabTemplates(); ?>
         <?php endif; ?>
-        <div data-tab-pane="tab-general" class="tab-pane space-y-6">
-    <!-- GRID -->
-    <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        <?php renderTabGeneral(); ?>
+        <?php renderTabMessages(); ?>
 
-      <!-- ENVIO -->
-      <section id="sendMessageSection" class="xl:col-span-1 bg-white border border-mid rounded-2xl p-6 card-soft">
-        <div class="font-medium mb-4">Enviar mensagem</div>
-
-        <?php
-        $sendStatusClass = 'text-slate-500';
-        $sendStatusMessage = '';
-        if (isset($sendSuccess)) {
-            $sendStatusClass = 'text-success font-medium';
-            $sendStatusMessage = $sendSuccess;
-        } elseif (isset($sendError)) {
-            $sendStatusClass = 'text-error font-medium';
-            $sendStatusMessage = $sendError;
-        }
-        ?>
-        <form id="sendForm" method="POST" action="?instance=<?= $selectedInstanceId ?>">
-          <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']); ?>">
-          <div class="grid grid-cols-1 gap-4">
-            <div>
-              <label class="text-xs text-slate-500">Número destino</label>
-              <input name="phone" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                     placeholder="5585999999999" required>
-            </div>
-
-            <div>
-              <label class="text-xs text-slate-500">Mensagem</label>
-              <textarea name="message" rows="3" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                        placeholder="Digite sua mensagem..." required></textarea>
-            </div>
-          </div>
-
-          <button type="submit" name="send" id="sendButton"
-                  class="mt-4 px-4 py-2 rounded-xl bg-primary text-white font-medium hover:opacity-90">
-            Enviar mensagem
-          </button>
-          <p id="sendStatus" aria-live="polite" class="mt-2 text-sm <?= $sendStatusClass ?>">
-            <?= $sendStatusMessage ? htmlspecialchars($sendStatusMessage) : '&nbsp;' ?>
-          </p>
-        </form>
-      </section>
-
-      <section id="assetUploadSection" class="xl:col-span-1 bg-white border border-mid rounded-2xl p-6 card-soft">
-        <div class="font-medium mb-4">Upload de arquivos</div>
-        <p class="text-xs text-slate-500">
-          Envie imagens, vídeos ou áudios para gerar o código que o bot pode usar (IMG, VIDEO, AUDIO). Agora o código sai como caminho local relativo (uploads/...).
-        </p>
-        <form id="assetUploadForm" method="POST" action="assets/upload_asset.php?instance=<?= urlencode($selectedInstanceId ?? '') ?>" enctype="multipart/form-data" class="mt-4 space-y-3">
-          <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']); ?>">
-          <div>
-            <label class="text-xs text-slate-500">Arquivo</label>
-            <input id="assetFileInput" type="file" name="asset_file" accept="image/*,video/*,audio/*"
-                   class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light" required>
-          </div>
-          <button id="assetUploadButton" type="button" name="upload_asset"
-                  class="px-4 py-2 rounded-xl bg-primary text-white font-medium hover:opacity-90">
-            Enviar arquivo
-          </button>
-          <div id="assetUploadProgress" class="hidden">
-            <div class="text-xs text-slate-500 mb-2">Enviando...</div>
-            <div class="w-full h-2 rounded-full bg-slate-200 overflow-hidden">
-              <div id="assetUploadProgressBar" class="h-full bg-primary" style="width:0%"></div>
-            </div>
-          </div>
-          <?php if ($assetUploadMessage): ?>
-            <p class="text-sm text-success mt-2"><?= htmlspecialchars($assetUploadMessage) ?></p>
-          <?php elseif ($assetUploadError): ?>
-            <p class="text-sm text-error mt-2"><?= htmlspecialchars($assetUploadError) ?></p>
-          <?php endif; ?>
-          <div id="assetUploadCodeWrap" class="mt-3 rounded-xl border border-mid bg-slate-50 p-3 text-xs text-slate-600 <?= $assetUploadCode ? '' : 'hidden' ?>">
-            <div class="text-[11px] text-slate-500 uppercase tracking-widest">Código para o bot</div>
-            <div id="assetUploadCode" class="mt-2 font-semibold text-slate-800 break-all"><?= htmlspecialchars($assetUploadCode) ?></div>
-          </div>
-        </form>
-      </section>
-
-      <!-- CONFIG RÁPIDA -->
-    <aside id="quickConfigSection" class="bg-white border border-mid rounded-2xl p-6 card-soft">
-        <div class="font-medium mb-4">Configuração rápida</div>
-
-      <?php
-      $quickConfigName = $selectedInstance['name'] ?? '';
-      $quickConfigBaseUrl = $selectedInstance['base_url'] ?? ("http://127.0.0.1:" . ($selectedInstance['port'] ?? ''));
-      $quickConfigMeta = $selectedInstance['meta'] ?? [];
-      $quickConfigMetaAccessToken = $quickConfigMeta['access_token'] ?? '';
-      $quickConfigMetaBusinessAccountId = $quickConfigMeta['business_account_id'] ?? '';
-      $quickConfigMetaTelephoneId = $quickConfigMeta['telephone_id'] ?? '';
-      ?>
-      <form method="POST" class="space-y-3" id="quickConfigForm">
-        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']); ?>">
-        <div>
-          <label class="text-xs text-slate-500">Nome da instância</label>
-          <input name="instance_name" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                 value="<?= htmlspecialchars($quickConfigName) ?>" required>
-        </div>
-
-        <div>
-          <label class="text-xs text-slate-500">Tipo de Integração</label>
-          <select id="quickConfigIntegrationType" name="integration_type"
-                  class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light" required>
-            <option value="baileys" <?= $quickConfigIntegrationType === 'baileys' ? 'selected' : '' ?>>Baileys</option>
-            <option value="meta" <?= $quickConfigIntegrationType === 'meta' ? 'selected' : '' ?>>Meta (WhatsApp Business API)</option>
-            <option value="web" <?= $quickConfigIntegrationType === 'web' ? 'selected' : '' ?>>Web</option>
-          </select>
-        </div>
-
-        <div id="quickConfigBaileysFields" class="<?= in_array($quickConfigIntegrationType, ['baileys', 'web'], true) ? '' : 'hidden' ?>">
-          <div>
-            <label class="text-xs text-slate-500">Base URL</label>
-            <input id="quickConfigBaseUrlInput" type="text"
-                   class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                   value="<?= htmlspecialchars($quickConfigBaseUrl) ?>" required>
-            <input type="hidden" id="quickConfigBaseUrlEncoded" name="instance_base_url_b64"
-                   value="<?= htmlspecialchars(base64_encode($quickConfigBaseUrl)) ?>">
-            <noscript class="text-[11px] text-error mt-1 block">JavaScript precisa estar ativo para alterar a Base URL.</noscript>
-          </div>
-        </div>
-
-        <div id="quickConfigMetaFields" class="<?= $quickConfigIntegrationType === 'meta' ? '' : 'hidden' ?>">
-          <div>
-            <label class="text-xs text-slate-500">Meta Access Token</label>
-            <input id="quickConfigMetaAccessToken" type="text" name="meta_access_token"
-                   class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                   value="<?= htmlspecialchars($quickConfigMetaAccessToken) ?>" required>
-            <p class="text-[11px] text-slate-500 mt-1">
-              Token de acesso da Meta para autenticação na WhatsApp Business API.
-            </p>
-          </div>
-          <div>
-            <label class="text-xs text-slate-500">WABA ID</label>
-            <input id="quickConfigMetaBusinessAccountId" type="text" name="meta_business_account_id"
-                   class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                   value="<?= htmlspecialchars($quickConfigMetaBusinessAccountId) ?>" required>
-            <p class="text-[11px] text-slate-500 mt-1">
-              ID da conta de negócio WhatsApp. Encontre em <a href="https://business.facebook.com/latest/settings/whatsapp_account" target="_blank" class="text-primary underline">https://business.facebook.com/latest/settings/whatsapp_account</a>.
-            </p>
-          </div>
-          <div>
-            <label class="text-xs text-slate-500">Telephone ID</label>
-            <input id="quickConfigMetaTelephoneId" type="text" name="meta_telephone_id"
-                   class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                   value="<?= htmlspecialchars($quickConfigMetaTelephoneId) ?>" required>
-            <p class="text-[11px] text-slate-500 mt-1">
-              O número de telefone associado à conta WhatsApp Business. Encontre em <a href="https://business.facebook.com/latest/whatsapp_manager/phone_numbers" target="_blank" class="text-primary underline">https://business.facebook.com/latest/whatsapp_manager/phone_numbers</a>.
-            </p>
-          </div>
-        </div>
-
-        <input type="hidden" name="update_instance" value="1">
-        <button id="quickConfigSaveButton" type="submit"
-                class="w-full px-4 py-2 rounded-xl bg-primary text-white font-medium hover:opacity-90">
-          Salvar
-        </button>
-
-        <?php if (!empty($quickConfigMessage ?? null)): ?>
-          <p class="text-xs text-success mt-1"><?= htmlspecialchars($quickConfigMessage) ?></p>
-          <?php if (!empty($quickConfigWarning ?? null)): ?>
-            <p class="text-xs text-alert mt-1"><?= htmlspecialchars($quickConfigWarning) ?></p>
-          <?php endif; ?>
-        <?php elseif (!empty($quickConfigError ?? null)): ?>
-          <p class="text-xs text-error mt-1"><?= htmlspecialchars($quickConfigError) ?></p>
-        <?php endif; ?>
-      </form>
-    </aside>
-
-    </div>
-
-      <section id="autoPauseSection" class="xl:col-span-2 bg-white border border-mid rounded-2xl p-6 card-soft" style="display: <?= in_array($quickConfigIntegrationType, ['baileys', 'web'], true) ? '' : 'none' ?>">
-        <div class="font-medium mb-1">Auto Pause</div>
-        <p class="text-sm text-slate-500 mb-4">
-          Pausa automaticamente a automação quando o dono enviar uma mensagem diretamente do WhatsApp.
-        </p>
-
-        <form id="autoPauseForm" class="space-y-4" onsubmit="return false;">
-          <div class="flex items-center gap-2">
-            <input type="checkbox" id="autoPauseEnabled" class="h-4 w-4 rounded" <?= $aiAutoPauseEnabled ? 'checked' : '' ?>>
-            <label for="autoPauseEnabled" class="text-sm text-slate-600">
-              Habilitar Auto Pause
-            </label>
-          </div>
-
-          <div>
-            <label class="text-xs text-slate-500">Minutos para pausar</label>
-            <input id="autoPauseMinutes" type="number" min="1" step="1"
-                   class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                   value="<?= htmlspecialchars($aiAutoPauseMinutes) ?>">
-            <p class="text-[11px] text-slate-500 mt-1">
-              Quando o dono enviar uma mensagem diretamente do WhatsApp, a automação será pausada por este tempo.
-            </p>
-          </div>
-
-          <div class="flex flex-wrap gap-2 items-center">
-            <button type="button" id="saveAutoPauseButton"
-                    class="px-4 py-2 rounded-xl bg-primary text-white font-medium hover:opacity-90">
-              Salvar
-            </button>
-            <p id="autoPauseStatus" aria-live="polite" class="text-sm text-slate-500 mt-2 sm:mt-0">
-              &nbsp;
-            </p>
-          </div>
-        </form>
-      </section>
-
-    <section id="curlExampleSection" class="bg-white border border-mid rounded-2xl p-6 card-soft">
-      <div class="flex items-start justify-between">
-        <div>
-          <div class="font-medium mb-1">Exemplo CURL para enviar mensagem</div>
-          <p class="text-sm text-slate-500">
-            Copie e cole este comando ajustando o número e a mensagem. Ele usa a instância selecionada
-            (porta <?= htmlspecialchars($curlEndpointPort) ?>).
-          </p>
-        </div>
-        <?php if (!$selectedInstance): ?>
-          <span class="text-xs px-2 py-1 rounded-full bg-alert/10 text-alert">Instância padrão</span>
-        <?php endif; ?>
-      </div>
-    <pre class="mt-4 overflow-auto text-xs rounded-xl bg-black/90 text-white p-4 max-w-xl"><code><?= htmlspecialchars($sampleCurlCommand) ?></code></pre>
-    </section>
-        </div>
-        <div data-tab-pane="tab-messages" class="tab-pane active space-y-6">
-          <p class="text-xs text-slate-500">
-            Métricas de mensagem em tempo real para monitorar envios e contatos.
-          </p>
-          <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            <div class="stat-card">
-              <span class="text-xs uppercase tracking-[0.3em] text-slate-200">Mensagens total</span>
-              <strong><?= (int)$logSummary['total_messages'] ?></strong>
-              <p class="text-xs text-white/70 mt-2">
-                Recebidas <?= (int)$logSummary['total_inbound'] ?> • Enviadas <?= (int)$logSummary['total_outbound'] ?>
-              </p>
-            </div>
-            <div class="stat-card">
-              <span class="text-xs uppercase tracking-[0.3em] text-slate-200">Contatos</span>
-              <strong><?= (int)$logSummary['total_contacts'] ?></strong>
-              <p class="text-xs text-white/70 mt-2">Conversas únicas registradas</p>
-            </div>
-            <div class="stat-card">
-              <span class="text-xs uppercase tracking-[0.3em] text-slate-200">Agendamentos</span>
-              <strong><?= (int)($logSummary['scheduled_pending'] + $logSummary['scheduled_sent'] + $logSummary['scheduled_failed']) ?></strong>
-              <p class="text-xs text-white/70 mt-2">
-                Pendentes <?= (int)$logSummary['scheduled_pending'] ?> • Enviados <?= (int)$logSummary['scheduled_sent'] ?>
-              </p>
-            </div>
-            <div class="stat-card">
-              <span class="text-xs uppercase tracking-[0.3em] text-slate-200">Taxa R Média</span>
-              <strong id="averageTaxarValue">-</strong>
-              <p class="text-xs text-white/70 mt-2">Média da taxa de resposta</p>
-            </div>
-          </div>
-        </div>
-
-    <?php
-    $legacyOpenAIConfig = $selectedInstance['openai'] ?? [];
-    $aiConfig = $selectedInstance['ai'] ?? [];
-    $aiEnabled = isset($aiConfig['enabled']) ? (bool)$aiConfig['enabled'] : !empty($legacyOpenAIConfig['enabled']);
-    $aiProviderRaw = $aiConfig['provider'] ?? 'openai';
-    $allowedProviders = ['openai', 'gemini', 'openrouter'];
-    $aiProvider = in_array(strtolower($aiProviderRaw), $allowedProviders, true) ? strtolower($aiProviderRaw) : 'openai';
-    $aiModel = $aiConfig['model'] ?? $legacyOpenAIConfig['model'] ?? 'gpt-4.1-mini';
-    $aiHistoryLimit = max(1, (int)($aiConfig['history_limit'] ?? $legacyOpenAIConfig['history_limit'] ?? 20));
-    $aiTemperature = $aiConfig['temperature'] ?? $legacyOpenAIConfig['temperature'] ?? 0.3;
-    $aiMaxTokens = max(64, (int)($aiConfig['max_tokens'] ?? $legacyOpenAIConfig['max_tokens'] ?? 600));
-    $aiMultiInputDelay = max(0, (int)($aiConfig['multi_input_delay'] ?? DEFAULT_MULTI_INPUT_DELAY));
-    $defaultSystemPrompt = 'You are a helpful WhatsApp assistant. Respond naturally and concisely.';
-    $aiSystemPrompt = $aiConfig['system_prompt'] ?? $legacyOpenAIConfig['system_prompt'] ?? $defaultSystemPrompt;
-    $aiAssistantPrompt = $aiConfig['assistant_prompt'] ?? $legacyOpenAIConfig['assistant_prompt'] ?? '';
-    $aiAssistantId = $aiConfig['assistant_id'] ?? $legacyOpenAIConfig['assistant_id'] ?? '';
-    $aiOpenaiMode = $aiConfig['openai_mode'] ?? $legacyOpenAIConfig['mode'] ?? 'responses';
-    $aiOpenaiApiKey = $aiConfig['openai_api_key'] ?? $legacyOpenAIConfig['api_key'] ?? '';
-    $aiGeminiApiKey = $aiConfig['gemini_api_key'] ?? '';
-    $aiGeminiInstruction = $aiConfig['gemini_instruction'] ?? DEFAULT_GEMINI_INSTRUCTION;
-    $aiModelFallback1 = $aiConfig['model_fallback_1'] ?? '';
-    $aiModelFallback2 = $aiConfig['model_fallback_2'] ?? '';
-    $aiOpenRouterApiKey = $aiConfig['openrouter_api_key'] ?? '';
-    $aiOpenRouterBaseUrl = $aiConfig['openrouter_base_url'] ?? DEFAULT_OPENROUTER_BASE_URL;
-    $aiAutoPauseEnabled = $aiConfig['auto_pause_enabled'] ?? false;
-    $aiAutoPauseMinutes = $aiConfig['auto_pause_minutes'] ?? 5;
-    $alarmConfig = $selectedInstance['alarms'] ?? [];
-    $audioTranscriptionConfig = $selectedInstance['audio_transcription'] ?? [];
-    $audioTranscriptionEnabled = !empty($audioTranscriptionConfig['enabled']);
-    $audioTranscriptionGeminiApiKey = $audioTranscriptionConfig['gemini_api_key'] ?? '';
-    $audioTranscriptionPrefix = $audioTranscriptionConfig['prefix'] ?? '🔊';
-    $secretaryConfig = $selectedInstance['secretary'] ?? [];
-    $secretaryEnabled = !empty($secretaryConfig['enabled']);
-    $secretaryIdleHours = max(0, (int)($secretaryConfig['idle_hours'] ?? 0));
-    $secretaryInitialResponse = $secretaryConfig['initial_response'] ?? '';
-    $secretaryQuickReplies = $secretaryConfig['quick_replies'] ?? [];
-    ?>
-
-    <div data-tab-pane="tab-ia" class="tab-pane space-y-6">
-      <div class="grid grid-cols-1 xl:grid-cols-3 gap-6">
-
-      <section id="aiSettingsSection" class="xl:col-span-3 bg-white border border-mid rounded-2xl p-6 card-soft">
-        <div class="font-medium mb-1">IA – OpenAI, Gemini &amp; OpenRouter</div>
-        <p class="text-sm text-slate-500 mb-4">Defina o comportamento das respostas automáticas desta instância.</p>
-
-        <form id="aiSettingsForm" class="space-y-4" onsubmit="return false;">
-          <div class="flex items-center gap-2">
-            <input type="checkbox" id="aiEnabled" class="h-4 w-4 rounded" <?= $aiEnabled ? 'checked' : '' ?>>
-            <label for="aiEnabled" class="text-sm text-slate-600">
-              Habilitar respostas automáticas
-            </label>
-          </div>
-
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div>
-              <label class="text-xs text-slate-500">Provider</label>
-              <select id="aiProvider" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light text-sm">
-                <option value="openai" <?= $aiProvider === 'openai' ? 'selected' : '' ?>>OpenAI</option>
-                <option value="gemini" <?= $aiProvider === 'gemini' ? 'selected' : '' ?>>Gemini</option>
-                <option value="openrouter" <?= $aiProvider === 'openrouter' ? 'selected' : '' ?>>OpenRouter</option>
-              </select>
-              <p class="text-xs text-slate-500 mt-1">
-                O OpenRouter permite usar provedores agregados (via https://openrouter.ai). Configure a chave e URL abaixo para habilitá-lo.
-              </p>
-            </div>
-            <div>
-              <label class="text-xs text-slate-500">Modelo</label>
-              <div class="space-y-3 mt-1">
-                <select id="aiModelPreset" class="w-full px-3 py-2 rounded-xl border border-mid bg-white text-sm">
-                  <!-- preenchido via JS -->
-                </select>
-                <input id="aiModel" class="w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                       value="<?= htmlspecialchars($aiModel) ?>" placeholder="Modelo principal">
-                <div class="grid gap-2">
-                  <input id="aiModelFallback1" class="w-full px-3 py-2 rounded-xl border border-mid bg-light text-xs"
-                         value="<?= htmlspecialchars($aiModelFallback1) ?>" placeholder="Fallback 1 (opcional)">
-                  <input id="aiModelFallback2" class="w-full px-3 py-2 rounded-xl border border-mid bg-light text-xs"
-                         value="<?= htmlspecialchars($aiModelFallback2) ?>" placeholder="Fallback 2 (opcional)">
-                </div>
-                <p class="text-xs text-slate-500">
-                  Informe até três modelos (principal + dois fallbacks). O sistema tentará os fallbacks caso o modelo anterior falhe.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div id="openaiFields" class="space-y-4 <?= $aiProvider === 'openai' ? '' : 'hidden' ?>">
-            <div>
-              <label class="text-xs text-slate-500">OpenAI API Key</label>
-              <div class="relative mt-1">
-                <input id="openaiApiKey" type="password" autocomplete="new-password"
-                       class="w-full px-3 py-2 rounded-xl border border-mid bg-light pr-10"
-                       placeholder="sk-..." value="<?= htmlspecialchars($aiOpenaiApiKey) ?>">
-                <button id="toggleOpenaiKey" type="button"
-                        class="absolute inset-y-0 right-2 flex items-center justify-center text-slate-500 hover:text-primary"
-                        aria-pressed="false" aria-label="Mostrar ou ocultar chave">
-                  <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
-                          d="M1.5 12s4.5-8.5 10.5-8.5S22.5 12 22.5 12s-4.5 8.5-10.5 8.5S1.5 12 1.5 12z"></path>
-                    <circle cx="12" cy="12" r="3"></circle>
-                  </svg>
-                </button>
-              </div>
-              <p class="text-[11px] text-slate-500 mt-1">
-                Use uma chave com acesso ao Responses e Assistants.
-              </p>
-            </div>
-
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div>
-                <label class="text-xs text-slate-500">API Mode</label>
-                <select id="openaiMode" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light text-sm">
-                  <option value="responses" <?= $aiOpenaiMode === 'responses' ? 'selected' : '' ?>>Responses API</option>
-                  <option value="assistants" <?= $aiOpenaiMode === 'assistants' ? 'selected' : '' ?>>Assistants API</option>
-                </select>
-                <p class="text-xs text-slate-500 mt-1">
-                  Choose if the instance keeps a thread (Assistants) or uses context snapshots (Responses).
-                </p>
-              </div>
-              <div id="openaiAssistantRow" style="<?= $aiOpenaiMode === 'assistants' ? '' : 'display:none;' ?>">
-                <label class="text-xs text-slate-500">Assistant ID</label>
-                <input id="openaiAssistantId" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light text-sm"
-                       placeholder="assistant_id" value="<?= htmlspecialchars($aiAssistantId) ?>">
-                <p class="text-xs text-slate-500 mt-1">
-                  Obrigatório apenas no modo Assistants API.
-                </p>
-              </div>
-            </div>
-
-          <div>
-            <div class="flex items-start justify-between gap-2">
-              <label class="text-xs text-slate-500">System prompt</label>
-              <button id="openaiSystemExpandBtn" type="button"
-                      class="text-xs text-slate-600 border border-slate-300 rounded-full px-3 py-1 hover:border-primary hover:text-primary transition">
-                Expandir
-              </button>
-            </div>
-            <textarea id="aiSystemPrompt" rows="4"
-                      class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                      placeholder="Descreva o papel do assistente"><?= htmlspecialchars($aiSystemPrompt) ?></textarea>
-          </div>
-
-          <div class="space-y-2">
-            <div class="flex items-start justify-between gap-2">
-              <label class="text-xs text-slate-500">Assistant instructions</label>
-              <div class="flex items-center gap-2">
-                <button id="openaiAssistantExpandBtn" type="button"
-                        class="text-xs text-slate-600 border border-slate-300 rounded-full px-3 py-1 hover:border-primary hover:text-primary transition">
-                  Expandir
-                </button>
-                <button id="aiFunctionsButton" type="button"
-                        class="text-xs text-primary border border-primary/60 rounded-full px-3 py-1 hover:bg-primary/5 transition">
-                  Funções disponíveis
-                </button>
-              </div>
-            </div>
-            <textarea id="aiAssistantPrompt" rows="4"
-                      class="w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                      placeholder="Como o assistente deve responder?"><?= htmlspecialchars($aiAssistantPrompt) ?></textarea>
-          </div>
-          </div>
-
-          <div id="geminiFields" class="space-y-4 <?= $aiProvider === 'gemini' ? '' : 'hidden' ?>">
-            <div>
-              <label class="text-xs text-slate-500">Gemini API Key</label>
-              <div class="relative mt-1">
-                <input id="geminiApiKey" type="password" autocomplete="new-password"
-                       class="w-full px-3 py-2 rounded-xl border border-mid bg-light pr-10"
-                       placeholder="GAPI..." value="<?= htmlspecialchars($aiGeminiApiKey) ?>">
-                <button id="toggleGeminiKey" type="button"
-                        class="absolute inset-y-0 right-2 flex items-center justify-center text-slate-500 hover:text-primary"
-                        aria-pressed="false" aria-label="Mostrar ou ocultar chave">
-                  <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
-                          d="M1.5 12s4.5-8.5 10.5-8.5S22.5 12 22.5 12s-4.5 8.5-10.5 8.5S1.5 12 1.5 12z"></path>
-                    <circle cx="12" cy="12" r="3"></circle>
-                  </svg>
-                </button>
-              </div>
-              <p class="text-xs text-slate-500 mt-1">
-                Utilize sua chave da Google Generative AI.
-              </p>
-            </div>
-          </div>
-
-          <div id="openrouterFields" class="space-y-4 <?= $aiProvider === 'openrouter' ? '' : 'hidden' ?>">
-            <div>
-              <label class="text-xs text-slate-500">OpenRouter API Key</label>
-              <div class="relative mt-1">
-                <input id="openrouterApiKey" type="password" autocomplete="new-password"
-                       class="w-full px-3 py-2 rounded-xl border border-mid bg-light pr-10"
-                       placeholder="Bearer ..." value="<?= htmlspecialchars($aiOpenRouterApiKey) ?>">
-                <button id="toggleOpenrouterKey" type="button"
-                        class="absolute inset-y-0 right-2 flex items-center justify-center text-slate-500 hover:text-primary"
-                        aria-pressed="false" aria-label="Mostrar ou ocultar chave">
-                </button>
-              </div>
-                <p class="text-xs text-slate-500 mt-1">
-                  Use a chave Bearer disponível em https://openrouter.ai.
-                </p>
-            </div>
-            <div>
-              <label class="text-xs text-slate-500">Base URL do OpenRouter</label>
-              <input id="openrouterBaseUrl" type="text"
-                     class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                     placeholder="<?= htmlspecialchars(DEFAULT_OPENROUTER_BASE_URL) ?>"
-                     value="<?= htmlspecialchars($aiOpenRouterBaseUrl) ?>">
-              <p class="text-xs text-slate-500 mt-1">
-                Defina outro domínio caso esteja usando um deployment próprio; deixe em branco para usar <?= htmlspecialchars(DEFAULT_OPENROUTER_BASE_URL) ?>.
-              </p>
-            </div>
-          </div>
-
-          <div class="space-y-4">
-            <div class="text-sm font-medium text-slate-700">Integração com Meta API (WhatsApp Business)</div>
-            <p class="text-[11px] text-slate-500 mb-3">
-              Configure as credenciais para enviar mensagens templates pre-aprovadas via WhatsApp Business API da Meta.
-            </p>
-            
-            <div>
-              <label class="text-xs text-slate-500">Meta Access Token</label>
-              <input id="metaAccessToken" type="password" autocomplete="new-password"
-                     class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                     placeholder="EAAM..." value="<?= htmlspecialchars($aiConfig['meta_access_token'] ?? '') ?>">
-              <p class="text-[11px] text-slate-500 mt-1">
-                Token de acesso da Meta para autenticação na WhatsApp Business API.
-              </p>
-            </div>
-
-            <div>
-              <label class="text-xs text-slate-500">WABA ID</label>
-              <input id="metaBusinessAccountId" type="text"
-                     class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                     placeholder="123456789012345" value="<?= htmlspecialchars($aiConfig['meta_business_account_id'] ?? '') ?>">
-              <p class="text-[11px] text-slate-500 mt-1">
-                ID da conta de negócio WhatsApp. Encontre em <a href="https://business.facebook.com/latest/settings/whatsapp_account" target="_blank" class="text-primary underline">https://business.facebook.com/latest/settings/whatsapp_account</a>.
-              </p>
-            </div>
-
-
-            <div>
-              <label class="text-xs text-slate-500">Telephone ID</label>
-              <input id="metaTelephoneId" type="text"
-                     class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                     placeholder="+5511999999999" value="<?= htmlspecialchars($aiConfig['meta_telephone_id'] ?? '') ?>">
-              <p class="text-[11px] text-slate-500 mt-1">
-                O número de telefone associado à conta WhatsApp Business. Encontre em <a href="https://business.facebook.com/latest/whatsapp_manager/phone_numbers" target="_blank" class="text-primary underline">https://business.facebook.com/latest/whatsapp_manager/phone_numbers</a>.
-              </p>
-            </div>
-            <div class="space-y-2">
-              <div class="flex items-start justify-between gap-2">
-                <label class="text-xs text-slate-500">Instruções do Gemini</label>
-                <div class="flex items-center gap-2">
-                  <button id="geminiExpandBtn" type="button"
-                          class="text-xs text-slate-600 border border-slate-300 rounded-full px-3 py-1 hover:border-primary hover:text-primary transition">
-                    Expandir
-                  </button>
-                  <button id="geminiFunctionsButton" type="button"
-                          class="text-xs text-primary border border-primary/60 rounded-full px-3 py-1 hover:bg-primary/5 transition">
-                    Funções disponíveis
-                  </button>
-                </div>
-              </div>
-              <div id="geminiInstructionWrap" class="relative">
-                <textarea id="geminiInstruction" rows="4"
-                          class="w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                          placeholder="Instrua o Gemini"><?= htmlspecialchars($aiGeminiInstruction) ?></textarea>
-              </div>
-            </div>
-            <div>
-              <label class="text-xs text-slate-500">Credencial Gemini</label>
-              <p class="text-[11px] text-slate-500 mt-1">
-                O Gemini aceita apenas a API key configurada acima; não é necessário enviar um arquivo JSON de credenciais.
-              </p>
-            </div>
-          </div>
-
-            <div id="functionsPanel" class="hidden border border-mid/70 rounded-2xl bg-white p-4 shadow-sm text-sm text-slate-600 space-y-3">
-            <div class="text-[11px] font-semibold uppercase tracking-widest text-slate-400">Funções disponíveis</div>
-            <ul class="space-y-2">
-              <li>
-                <span class="font-semibold text-slate-800">dados("email")</span> – traz cadastro do cliente (nome, status, assinatura e expiração) para enriquecer o contexto.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">verificar_disponibilidade("inicio","fim","calendar_id","timezone")</span> – consulta se o intervalo está livre no Google Calendar (usa disponibilidade configurada).
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">sugerir_horarios("data","janela","duracao_min","limite","calendar_id","timezone")</span> – sugere horários livres dentro de uma janela (ex: "09:00-18:00").
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">marcar_evento("titulo","inicio","fim","participantes","descricao","calendar_id","timezone")</span> – cria evento no Google Calendar.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">remarcar_evento("evento_id","novo_inicio","novo_fim","calendar_id","timezone")</span> – remarca evento existente.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">desmarcar_evento("evento_id","calendar_id")</span> – remove evento.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">listar_eventos("inicio","fim","calendar_id","timezone")</span> – lista eventos no período.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">agendar("DD/MM/AAAA","HH:MM","Texto","tag","tipo")</span> – agenda lembrete fixo em UTC-3 e retorna ID, horário, tag e tipo (tag padrão <code>default</code>, tipo <code>followup</code>).
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">agendar2("+5m","Texto","tag","tipo")</span> – lembra em tempo relativo (m/h/d), também com tag/tipo configuráveis.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">cancelar_e_agendar2("+24h","Texto","tag","tipo")</span> – cancela pendentes, dispara novo lembrete e devolve quantos foram cancelados.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">listar_agendamentos("tag","tipo") / apagar_agenda("scheduledId") / apagar_agendas_por_tag("tag") / apagar_agendas_por_tipo("tipo")</span> – controlam o inventário de lembretes.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">set_estado("estado") / get_estado()</span> – mantém o estágio atual do funil.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">set_contexto("chave","valor") / get_contexto("chave") / limpar_contexto(["chave"])</span> – memória curta por contato para pistas extras.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">set_variavel("chave","valor") / get_variavel("chave")</span> – variáveis persistentes por instância (não vinculadas ao contato).
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">Contexto automático</span> – estado, contexto e status_followup são injetados em todos os prompts para a IA (não aparecem para o usuário final).
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">optout()</span> – cancela follow-ups e marca o contato para não receber novas tentativas.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">template("ID_Template", "var1", "var2", "var3")</span> – envia uma mensagem template pre-aprovada via Meta API. As variáveis var1, var2 e var3 são opcionais.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">status_followup()</span> – resumo de estado, trilhas ativas e próximos agendamentos.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">tempo_sem_interacao()</span> – responde quanto tempo passou desde a última resposta do cliente.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">log_evento("categoria","descrição","json_opcional")</span> – auditoria leve com categoria e mensagem.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">boomerang()</span> – dispara imediatamente outra resposta (“Boomerang acionado”) e registra o aviso.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">whatsapp("numero","mensagem")</span> – envia mensagem direta via WhatsApp.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">mail("destino","assunto","corpo","remetente")</span> – envia um e-mail com sendmail local; o remetente é opcional e, se omitido, usa <code>noreply@janeri.com.br</code>.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">get_web("URL")</span> – busca até 1.200 caracteres de outra página para contexto.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">IMG:uploads/imagem.jpg|Legenda opcional</span> – envia a imagem indicada para o usuário (local em assets/uploads). Também aceita URL remota (http/https) e faz cache.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">VIDEO:uploads/video.mp4|Legenda opcional</span> – envia o vídeo indicado para o usuário (local em assets/uploads). Também aceita URL remota (http/https) e faz cache.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">AUDIO:uploads/audio.mp3</span> – envia o áudio indicado para o usuário (local em assets/uploads). Também aceita URL remota (http/https) e faz cache.
-              </li>
-              <li>
-                <span class="font-semibold text-slate-800">CONTACT:+55DDDNNNNNNNN|Nome|Nota opcional</span> – envia um cartão de contato (o nome e a nota são opcionais). O bot também entende quando o usuário envia um contato e repassa os dados para a IA.
-              </li>
-            </ul>
-            <p class="text-[11px] text-slate-500">
-              É possível encadear várias funções em uma única resposta; elas serão executadas na ordem em que aparecem e não serão expostas ao usuário final.
-            </p>
-            <p class="text-[11px] text-slate-400">
-              Clique novamente em “Funções disponíveis” para esconder este card.
-            </p>
-            <div class="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-3 text-[12px] space-y-2">
-              <div class="font-medium text-slate-800">Guia para prompts</div>
-              <p class="text-[11px] text-slate-500">
-                Copie esse texto para o prompt da IA que alimenta o bot. Ele explica o comportamento esperado e todas as funções já disponíveis.
-              </p>
-              <pre id="functionsGuide" class="p-3 rounded-xl bg-slate-100 text-xs overflow-auto max-h-48" style="white-space: pre-wrap;">
-Instruções de funções:
-
-- dados("email"): traz nome, email, telefone, status e validade da assinatura do cadastro no MySQL kitpericia.
-- verificar_disponibilidade("inicio","fim","calendar_id","timezone"): consulta se o intervalo está livre no Google Calendar.
-- sugerir_horarios("data","janela","duracao_min","limite","calendar_id","timezone"): sugere horários livres dentro de uma janela (ex: "09:00-18:00").
-- marcar_evento("titulo","inicio","fim","participantes","descricao","calendar_id","timezone"): cria evento no Google Calendar.
-- remarcar_evento("evento_id","novo_inicio","novo_fim","calendar_id","timezone"): remarca evento existente.
-- desmarcar_evento("evento_id","calendar_id"): remove evento do Google Calendar.
-- listar_eventos("inicio","fim","calendar_id","timezone"): lista eventos no período.
-- agendar("DD/MM/AAAA","HH:MM","Texto","tag","tipo") / agendar2("+5m","Texto","tag","tipo"): agendam lembretes com tag/tipo (padrões tag=default, tipo=followup) e retornam ID + horário.
-- cancelar_e_agendar2("+24h","Texto","tag","tipo"): cancela tudo pendente, cria novo lembrete e informa quantos foram cancelados.
-- listar_agendamentos("tag","tipo"): lista agendamentos do contato; apagar_agenda("scheduledId"), apagar_agendas_por_tag("tag") e apagar_agendas_por_tipo("tipo") mantêm o painel limpo.
-- set_estado("estado") / get_estado(): salva e consulta o estágio do funil.
-- set_contexto("chave","valor") / get_contexto("chave") / limpar_contexto(["chave"]): memória curta por contato para pistas extras.
-- set_variavel("chave","valor") / get_variavel("chave"): variáveis persistentes por instância.
-- optout(): cancela follow-ups pendentes e marca que o cliente não deve receber novas tentativas.
-- template("ID_Template", "var1", "var2", "var3"): envia uma mensagem template pre-aprovada via Meta API. As variáveis var1, var2 e var3 são opcionais.
-- status_followup(): resumo de estado, trilhas ativas e próximos agendamentos pendentes.
-- estado, contexto e status_followup são injetados automaticamente em todo prompt enviado à IA.
-- tempo_sem_interacao(): retorna há quantos segundos o cliente está em silêncio, útil para ajustar o tom (curto = gentil, longo = acolhedor).
-- log_evento("categoria","descrição","json_opcional"): auditoria leve para métricas.
-- boomerang(): sinaliza envio imediato de "Boomerang acionado".
-- whatsapp("numero","mensagem"), mail("destino","assunto","corpo","remetente") e get_web("URL") seguem como antes (remetente opcional; padrão noreply@janeri.com.br).
-- Use `IMG:uploads/<arquivo>` para enviar imagens direto de assets/uploads. Também aceita URL remota (http/https) e faz cache. Você pode anotar uma legenda com `|Legenda`. Combine com `#` para manter o texto organizado.
-- Use `VIDEO:uploads/<arquivo>` para enviar vídeos direto de assets/uploads. Também aceita URL remota (http/https) e faz cache. Legenda opcional com `|Legenda`.
-- Use `AUDIO:uploads/<arquivo>` para enviar áudios direto de assets/uploads. Também aceita URL remota (http/https) e faz cache.
-- Use `CONTACT:<telefone>|Nome|Nota` para enviar um cartão vCard; o bot também repassa contatos recebidos para a IA no formato “CONTATO RECEBIDO”.
-
-Retorno recomendado:
-{
-  ok: true|false,
-  code: "OK"|"ERR_INVALID_ARGS"|...,
-  message: "texto curto",
-  data: { ... }
-}
-
-Como usar:
-1. Sempre finalize sua resposta com as funções desejadas no formato `funcao("arg1","arg2",...)`; múltiplas funções podem ser separadas por linha ou espaço.
-2. Evite texto livre extra quando quiser apenas acionar funções; explicações podem vir antes dos comandos.
-3. O bot remove esses comandos antes de responder ao usuário.
-4. Ajuste o tom usando `tempo_sem_interacao()` e, quando necessário, `status_followup()` para acompanhar o funil.
-5. Separe o texto destinado ao usuário das instruções/funções com `&&&`; o que vier depois do marcador será tratado como comandos e não será enviado ao WhatsApp.
-</pre>
-              <div class="flex justify-end gap-2">
-                <button id="copyFunctionsGuide" class="px-3 py-1 text-[11px] font-medium rounded-full border border-primary text-primary hover:bg-primary/10 transition">Copiar guia</button>
-                <span id="functionsGuideFeedback" class="text-[11px] text-success hidden">Copiado!</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div>
-              <label class="text-xs text-slate-500">Histórico (últimas mensagens)</label>
-              <input id="aiHistoryLimit" type="number" min="1" step="1"
-                     class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                     value="<?= htmlspecialchars($aiHistoryLimit) ?>">
-            </div>
-            <div>
-              <label class="text-xs text-slate-500">Temperatura</label>
-              <input id="aiTemperature" type="number" min="0" max="2" step="0.1"
-                     class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                     value="<?= htmlspecialchars($aiTemperature) ?>">
-            </div>
-            <div>
-              <label class="text-xs text-slate-500">Tokens máximos</label>
-              <input id="aiMaxTokens" type="number" min="64" step="1"
-                     class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                     value="<?= htmlspecialchars($aiMaxTokens) ?>">
-            </div>
-          </div>
-
-          <div>
-            <label class="text-xs text-slate-500">Delay multi-input (segundos)</label>
-            <input id="aiMultiInputDelay" type="number" min="0" step="1"
-                   class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                   value="<?= htmlspecialchars($aiMultiInputDelay) ?>">
-            <p class="text-[11px] text-slate-500 mt-1">
-              Aguarda esta quantidade de segundos antes de responder para coletar mensagens adicionais do usuário.
-            </p>
-          </div>
-
-          <div class="flex flex-wrap gap-2 items-center">
-            <button type="button" id="saveAIButton"
-                    class="px-4 py-2 rounded-xl bg-primary text-white font-medium hover:opacity-90">
-              Salvar
-            </button>
-            <button type="button" id="testAIButton"
-                    class="px-4 py-2 rounded-xl border border-primary text-primary hover:bg-primary/5">
-              Testar IA
-            </button>
-            <p id="aiStatus" aria-live="polite" class="text-sm text-slate-500 mt-2 sm:mt-0">
-              &nbsp;
-            </p>
-          </div>
-        </form>
-      </section>
-
-      </div>
-    </div>
-    <div data-tab-pane="tab-agenda" class="tab-pane space-y-6">
-      <section id="calendarSettingsSection" class="bg-white border border-mid rounded-2xl p-6 mt-6 card-soft">
-        <div class="font-medium mb-1">Google Calendar</div>
-          <p class="text-sm text-slate-500 mb-4">
-            Conecte o calendário da instância e cadastre disponibilidade para a IA agendar compromissos.
-          </p>
-
-          <div class="space-y-3">
-            <div id="calendarStatus" class="text-xs text-slate-500">Carregando...</div>
-            <div class="flex flex-wrap gap-2">
-              <button id="calendarConnectButton" type="button"
-                      class="px-3 py-2 rounded-xl bg-primary text-white text-sm font-medium hover:opacity-90">
-                Conectar
-              </button>
-              <button id="calendarDisconnectButton" type="button"
-                      class="px-3 py-2 rounded-xl border border-primary text-primary text-sm hover:bg-primary/5">
-                Desconectar
-              </button>
-              <button id="calendarForceConnectButton" type="button"
-                      class="px-3 py-2 rounded-xl border border-red-300 text-red-500 text-sm hover:bg-red-50">
-                Forçar conectar
-              </button>
-            </div>
-          </div>
-
-          <div class="mt-5 border-t border-mid/70 pt-4 space-y-3">
-            <div class="flex items-center justify-between">
-              <label class="text-xs text-slate-500">Calendários do Google</label>
-              <button id="calendarRefreshButton" type="button"
-                      class="text-xs text-primary border border-primary/60 rounded-full px-3 py-1 hover:bg-primary/5 transition">
-                Atualizar lista
-              </button>
-            </div>
-            <select id="calendarGoogleSelect" class="w-full px-3 py-2 rounded-xl border border-mid bg-light text-sm">
-              <option value="">Selecione um calendário</option>
-            </select>
-          </div>
-
-          <div class="mt-5 space-y-3">
-            <div>
-              <label class="text-xs text-slate-500">ID do calendário</label>
-              <input id="calendarIdInput" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                     placeholder="ex: primary ou id@group.calendar.google.com">
-            </div>
-            <div>
-              <label class="text-xs text-slate-500">Timezone</label>
-              <input id="calendarTimezoneInput" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                     placeholder="America/Sao_Paulo">
-            </div>
-            <input type="hidden" id="calendarAvailabilityInput">
-            <div id="calendarAvailabilityBuilder" class="space-y-3">
-              <div class="flex items-center justify-between">
-                <label class="text-xs text-slate-500 uppercase tracking-widest">Disponibilidade visual</label>
-                <span class="text-[11px] text-slate-400">Adicione faixas de horário por dia</span>
-              </div>
-              <?php
-              $availabilityDays = [
-                  'mon' => 'Segunda-feira',
-                  'tue' => 'Terça-feira',
-                  'wed' => 'Quarta-feira',
-                  'thu' => 'Quinta-feira',
-                  'fri' => 'Sexta-feira',
-                  'sat' => 'Sábado',
-                  'sun' => 'Domingo'
-              ];
-              foreach ($availabilityDays as $dayKey => $dayLabel):
-              ?>
-                <div data-availability-day="<?= $dayKey ?>" class="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-3">
-                  <div class="flex items-center justify-between">
-                    <div class="text-xs font-semibold text-slate-600"><?= $dayLabel ?></div>
-                    <button type="button" data-add-range-day="<?= $dayKey ?>"
-                            class="text-[11px] font-semibold text-primary hover:underline">
-                      Adicionar faixa
-                    </button>
-                  </div>
-                  <div class="mt-2 space-y-2" data-availability-rows></div>
-                  <p class="text-[11px] text-slate-400 mt-2">
-                    Combine horários seguidos para definir quando a IA pode agendar eventos.
-                  </p>
-                </div>
-              <?php endforeach; ?>
-            </div>
-            <div class="flex items-center gap-2">
-              <input type="checkbox" id="calendarDefaultCheckbox" class="h-4 w-4 rounded">
-              <label for="calendarDefaultCheckbox" class="text-xs text-slate-500">Definir como padrão</label>
-            </div>
-            <div class="flex items-center gap-2">
-              <button id="calendarSaveButton" type="button"
-                      class="px-4 py-2 rounded-xl bg-primary text-white text-sm font-medium hover:opacity-90">
-                Salvar calendário
-              </button>
-              <span id="calendarSaveStatus" class="text-xs text-slate-500">&nbsp;</span>
-            </div>
-          </div>
-
-          <div class="mt-6 space-y-2">
-            <div class="text-xs text-slate-500 uppercase tracking-widest">Calendários cadastrados</div>
-            <div id="calendarConfigsList" class="space-y-2 text-sm text-slate-600">
-              <div class="text-xs text-slate-400">Nenhum calendário cadastrado.</div>
-            </div>
-          </div>
-        </div>
-      </section>
-    </div>
-    <div data-tab-pane="tab-automacao" class="tab-pane space-y-6">
-      <section id="audioTranscriptionSection" class="bg-white border border-mid rounded-2xl p-6 card-soft" style="display: <?= in_array($quickConfigIntegrationType, ['baileys', 'web'], true) ? '' : 'none' ?>">
-        <div class="font-medium mb-1">Transcrever áudio</div>
-        <p class="text-sm text-slate-500 mb-4">
-          Responda automaticamente com a transcrição do áudio recebido nesta instância.
-        </p>
-
-        <form id="audioTranscriptionForm" class="space-y-4" onsubmit="return false;">
-          <div class="flex items-center gap-2">
-            <input type="checkbox" id="audioTranscriptionEnabled" class="h-4 w-4 rounded"
-                   <?= $audioTranscriptionEnabled ? 'checked' : '' ?>>
-            <label for="audioTranscriptionEnabled" class="text-sm text-slate-600">
-              Habilitar transcrição de áudio
-            </label>
-          </div>
-
-          <div>
-            <label class="text-xs text-slate-500">Gemini API Key</label>
-            <div class="relative mt-1">
-              <input id="audioTranscriptionGeminiKey" type="password" autocomplete="new-password"
-                     class="w-full px-3 py-2 rounded-xl border border-mid bg-light pr-10"
-                     placeholder="GAPI..." value="<?= htmlspecialchars($audioTranscriptionGeminiApiKey) ?>">
-              <button id="toggleAudioGeminiKey" type="button"
-                      class="absolute inset-y-0 right-2 flex items-center justify-center text-slate-500 hover:text-primary"
-                      aria-pressed="false" aria-label="Mostrar ou ocultar chave">
-                <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
-                        d="M1.5 12s4.5-8.5 10.5-8.5S22.5 12 22.5 12s-4.5 8.5-10.5 8.5S1.5 12 1.5 12z"></path>
-                  <circle cx="12" cy="12" r="3"></circle>
-                </svg>
-              </button>
-            </div>
-            <p class="text-[11px] text-slate-500 mt-1">
-              Necessário para transcrever arquivos de áudio.
-            </p>
-          </div>
-
-          <div>
-            <label class="text-xs text-slate-500">Prefixo da transcrição</label>
-            <input id="audioTranscriptionPrefix" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                   value="<?= htmlspecialchars($audioTranscriptionPrefix) ?>" placeholder="🔊">
-            <p class="text-[11px] text-slate-500 mt-1">
-              Será enviado como "PREFIXO: texto transcrito".
-            </p>
-          </div>
-
-          <div class="flex flex-wrap gap-2 items-center">
-            <button type="button" id="saveAudioTranscriptionButton"
-                    class="px-4 py-2 rounded-xl bg-primary text-white font-medium hover:opacity-90">
-              Salvar
-            </button>
-            <p id="audioTranscriptionStatus" aria-live="polite" class="text-sm text-slate-500 mt-2 sm:mt-0">
-              &nbsp;
-            </p>
-          </div>
-        </form>
-      </section>
-
-      <section id="secretarySection" class="bg-white border border-mid rounded-2xl p-6 card-soft" style="display: <?= in_array($quickConfigIntegrationType, ['baileys', 'web'], true) ? '' : 'none' ?>">
-        <div class="font-medium mb-1">Secretária virtual</div>
-        <p class="text-sm text-slate-500 mb-4">
-          Responda automaticamente quando o contato voltar após um tempo sem interação.
-        </p>
-
-        <form id="secretaryForm" class="space-y-4" onsubmit="return false;">
-          <div class="flex items-center gap-2">
-            <input type="checkbox" id="secretaryEnabled" class="h-4 w-4 rounded"
-                   <?= $secretaryEnabled ? 'checked' : '' ?>>
-            <label for="secretaryEnabled" class="text-sm text-slate-600">
-              Habilitar secretária virtual
-            </label>
-          </div>
-
-          <div>
-            <label class="text-xs text-slate-500">Tempo sem contato (horas)</label>
-            <input id="secretaryIdleHours" type="number" min="1" step="1"
-                   class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                   value="<?= htmlspecialchars((string)$secretaryIdleHours) ?>">
-          </div>
-
-          <div>
-            <label class="text-xs text-slate-500">Resposta inicial</label>
-            <textarea id="secretaryInitialResponse" rows="3"
-                      class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light"
-                      placeholder="oi, já já lhe atendo"><?= htmlspecialchars($secretaryInitialResponse) ?></textarea>
-          </div>
-
-          <div class="space-y-3">
-            <div class="text-xs text-slate-500 uppercase tracking-widest">Respostas rápidas</div>
-            <div id="secretaryQuickReplies" class="grid grid-cols-1 gap-3"></div>
-            <button type="button" id="addSecretaryReply"
-                    class="text-xs text-primary border border-primary/60 rounded-full px-3 py-1 hover:bg-primary/5 transition">
-              Adicionar resposta rápida
-            </button>
-          </div>
-
-          <div class="flex flex-wrap gap-2 items-center">
-            <button type="button" id="saveSecretaryButton"
-                    class="px-4 py-2 rounded-xl bg-primary text-white font-medium hover:opacity-90">
-              Salvar
-            </button>
-            <p id="secretaryStatus" aria-live="polite" class="text-sm text-slate-500 mt-2 sm:mt-0">
-              &nbsp;
-            </p>
-          </div>
-        </form>
-      </section>
-
-      <section id="alarmSettingsSection" class="xl:col-span-2 bg-white border border-mid rounded-2xl p-6 card-soft">
-        <div class="flex items-start justify-between">
-          <div>
-            <div class="font-medium mb-1">Alarmes de instância</div>
-            <p class="text-sm text-slate-500">
-              Receba alertas por e-mail quando algo crítico acontecer na instância selecionada.
-            </p>
-          </div>
-          <span class="text-xs text-slate-500">Configurado via serviço Node</span>
-        </div>
-        <form id="alarmConfigForm" class="space-y-5 mt-4" onsubmit="return false;">
-          <?php
-          $alarmEvents = [
-            'whatsapp' => [
-              'label' => 'WhatsApp desconectado',
-              'help' => 'Dispara sempre que a conexão com o WhatsApp cair.'
-            ],
-            'server' => [
-              'label' => 'Servidor desconectado',
-              'help' => 'Detecta quando a porta da instância não responde (rodar pelo monitor).'
-            ],
-            'error' => [
-              'label' => 'Erro encontrado',
-              'help' => 'Quando o serviço registrar um erro crítico e parar de funcionar corretamente.'
-            ]
-          ];
-          foreach ($alarmEvents as $eventKey => $eventMeta):
-            $alarmEntry = $alarmConfig[$eventKey] ?? ['enabled' => false, 'recipients' => '', 'interval' => 120];
-            $intervalValue = (int)($alarmEntry['interval'] ?? 120);
-            $intervalValue = max(1, min(1440, $intervalValue));
-            $displayStyle = ($quickConfigIntegrationType === 'meta' && $eventKey !== 'error') ? 'style="display:none"' : '';
-          ?>
-          <div class="rounded-2xl border border-mid/70 bg-light/60 p-4 space-y-3" data-alarm-event="<?= $eventKey ?>" <?= $displayStyle ?>>
-            <div class="flex items-center justify-between gap-3">
-              <label class="flex items-center gap-2 text-sm font-medium text-slate-700">
-                <input id="alarm_<?= $eventKey ?>_enabled" type="checkbox" class="h-4 w-4 rounded border-mid text-primary"
-                       <?= (!empty($alarmEntry['enabled']) ? 'checked' : '') ?>>
-                <?= htmlspecialchars($eventMeta['label']) ?>
-              </label>
-              <span class="text-[11px] text-slate-500"><?= htmlspecialchars($eventMeta['help']) ?></span>
-            </div>
-            <div class="grid grid-cols-1 lg:grid-cols-4 gap-3">
-              <div class="lg:col-span-3">
-                <label class="text-xs text-slate-500">E-mails destino (separe por vírgula)</label>
-                <input id="alarm_<?= $eventKey ?>_recipients" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-white text-sm"
-                       placeholder="ex: devops@empresa.com" value="<?= htmlspecialchars($alarmEntry['recipients'] ?? '') ?>">
-              </div>
-              <div>
-                <label class="text-xs text-slate-500">Intervalo (minutos)</label>
-                <input id="alarm_<?= $eventKey ?>_interval" type="range" min="1" max="1440" step="1"
-                       value="<?= $intervalValue ?>" class="mt-2 w-full accent-primary">
-                <div class="text-xs text-slate-500 mt-1">
-                  <span id="alarm_<?= $eventKey ?>_interval_label"></span>
-                </div>
-              </div>
-            </div>
-          </div>
-          <?php endforeach; ?>
-          <div class="flex flex-col sm:flex-row sm:items-center gap-3">
-            <button id="saveAlarmButton" type="button"
-                    class="px-4 py-2 rounded-xl bg-primary text-white font-medium hover:opacity-90">
-              Salvar alarmes
-            </button>
-            <p id="alarmStatus" aria-live="polite" class="text-xs text-slate-500 sm:text-sm">
-              &nbsp;
-            </p>
-          </div>
-        </form>
-      </section>
-    </div>
-    <div data-tab-pane="tab-monitoramento" class="tab-pane space-y-6">
-    <section id="logSummarySection" class="bg-white border border-mid rounded-2xl p-6 mt-6 card-soft">
-      <div class="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 class="text-lg font-semibold text-dark">Painel de logs</h2>
-          <p class="text-xs text-slate-500">Resumo para análise via IA e exportação completa.</p>
-        </div>
-        <a href="<?= htmlspecialchars($exportLogUrl) ?>"
-           class="px-3 py-2 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90">
-          Salvar log completo
-        </a>
-      </div>
-      <form method="GET" class="mt-4 flex flex-wrap items-end gap-3">
-        <input type="hidden" name="instance" value="<?= htmlspecialchars($selectedInstanceId ?? '') ?>">
-        <div class="min-w-[180px]">
-          <label class="text-[11px] text-slate-500 uppercase tracking-widest">Período</label>
-          <select id="logRangeSelect" name="log_range" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-white text-sm">
-            <option value="today" <?= $logRange['preset'] === 'today' ? 'selected' : '' ?>>Hoje</option>
-            <option value="yesterday" <?= $logRange['preset'] === 'yesterday' ? 'selected' : '' ?>>Ontem</option>
-            <option value="all" <?= $logRange['preset'] === 'all' ? 'selected' : '' ?>>Período total</option>
-            <option value="custom" <?= $logRange['preset'] === 'custom' ? 'selected' : '' ?>>Personalizado</option>
-          </select>
-        </div>
-        <div id="logRangeCustomFields" class="<?= $logRange['preset'] === 'custom' ? '' : 'hidden' ?> flex flex-wrap gap-3">
-          <div>
-            <label class="text-[11px] text-slate-500 uppercase tracking-widest">Início</label>
-            <input type="date" name="log_start" value="<?= htmlspecialchars($logRange['custom_start'] ?? '') ?>"
-                   class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-white text-sm">
-          </div>
-          <div>
-            <label class="text-[11px] text-slate-500 uppercase tracking-widest">Fim</label>
-            <input type="date" name="log_end" value="<?= htmlspecialchars($logRange['custom_end'] ?? '') ?>"
-                   class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-white text-sm">
-          </div>
-        </div>
-        <button type="submit" class="px-4 py-2 rounded-xl border border-primary text-primary text-sm font-semibold hover:bg-primary/5">
-          Atualizar
-        </button>
-      </form>
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-4">
-        <div class="rounded-2xl border border-mid bg-slate-50 p-3">
-          <div class="text-[11px] text-slate-500 uppercase tracking-widest">Mensagens</div>
-          <div class="text-2xl font-semibold text-dark"><?= (int)$logSummary['total_messages'] ?></div>
-          <div class="text-[11px] text-slate-500 mt-1">
-            Recebidas: <?= (int)$logSummary['total_inbound'] ?> • Enviadas: <?= (int)$logSummary['total_outbound'] ?>
-          </div>
-        </div>
-        <div class="rounded-2xl border border-mid bg-slate-50 p-3">
-          <div class="text-[11px] text-slate-500 uppercase tracking-widest">Contatos</div>
-          <div class="text-2xl font-semibold text-dark"><?= (int)$logSummary['total_contacts'] ?></div>
-          <div class="text-[11px] text-slate-500 mt-1">Conversas únicas registradas</div>
-        </div>
-        <div class="rounded-2xl border border-mid bg-slate-50 p-3">
-          <div class="text-[11px] text-slate-500 uppercase tracking-widest">Comandos</div>
-          <div class="text-2xl font-semibold text-dark"><?= (int)$logSummary['total_commands'] ?></div>
-          <div class="text-[11px] text-slate-500 mt-1">Funções e retornos identificados</div>
-        </div>
-        <div class="rounded-2xl border border-mid bg-slate-50 p-3">
-          <div class="text-[11px] text-slate-500 uppercase tracking-widest">Agendamentos</div>
-          <div class="text-2xl font-semibold text-dark">
-            <?= (int)($logSummary['scheduled_pending'] + $logSummary['scheduled_sent'] + $logSummary['scheduled_failed']) ?>
-          </div>
-          <div class="text-[11px] text-slate-500 mt-1">
-            Pendentes: <?= (int)$logSummary['scheduled_pending'] ?> • Enviados: <?= (int)$logSummary['scheduled_sent'] ?> • Falhas: <?= (int)$logSummary['scheduled_failed'] ?>
-          </div>
-        </div>
-      </div>
-      <div class="text-[11px] text-slate-500 mt-3">
-        Período: <?= htmlspecialchars($logRange['label']) ?> • Última atividade: <?= htmlspecialchars(formatLogDateTime($logSummary['last_message_at']) ?: 'sem registros') ?>
-      </div>
-    </section>
-    </div>
+    <?php extractAiConfigVars(); ?>
+        <?php renderTabIA(); ?>
+        <?php renderTabAgenda(); ?>
+        <?php renderTabAutomacao(); ?>
+        <?php renderTabWebAccess(); ?>
+        <?php renderTabMonitoramento(); ?>
+        <?php renderTabAPI(); ?>
   </div>
 </div>
   </main>
 </div>
+<?php renderDebugLogOverlay(); ?>
 <footer class="w-full bg-slate-900 text-slate-200 text-xs text-center py-3 mt-6">
   Por <strong>Osvaldo J. Filho</strong> |
   <a href="https://linkedin.com/in/ojaneri" class="text-sky-400 hover:underline" target="_blank" rel="noreferrer">LinkedIn</a> |
@@ -3485,237 +474,10 @@ Como usar:
 <button id="helpTourButton" class="tour-help-button" type="button" aria-label="Abrir tour guiado" title="Ajuda">
   ?
 </button>
-<!-- Modal for Create Instance -->
-<div id="createModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
-  <div class="bg-white rounded-2xl p-6 w-full max-w-md mx-4">
-    <div class="flex justify-between items-center mb-4">
-      <h2 class="text-lg font-semibold">Criar nova instância</h2>
-      <button onclick="closeCreateModal()" class="text-slate-500 hover:text-dark">&times;</button>
-    </div>
-    <form method="POST">
-      <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($_SESSION['csrf_token']); ?>">
-      <div class="mb-4">
-        <label class="text-xs text-slate-500">Nome da instância</label>
-        <input type="text" name="name" class="mt-1 w-full px-3 py-2 rounded-xl border border-mid bg-light" placeholder="Ex: Instância Principal" required>
-      </div>
-      <button type="submit" name="create" class="w-full px-4 py-2 rounded-xl bg-primary text-white font-medium hover:opacity-90">Criar instância</button>
-    </form>
-  </div>
-</div>
-
-<!-- Modal for QR Code -->
-<div id="qrModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
-  <div class="bg-white rounded-2xl p-6 w-full max-w-md mx-4">
-    <div class="flex justify-between items-center mb-4">
-      <h2 class="text-lg font-semibold">Conectar WhatsApp</h2>
-      <button onclick="closeQRModal()" class="text-slate-500 hover:text-dark">&times;</button>
-    </div>
-    <p class="text-sm text-slate-600 mb-4">Escaneie o código QR abaixo com o WhatsApp para conectar esta instância.</p>
-    <div id="qrBox" class="text-center space-y-3">
-      <img id="qrImage" src="" alt="Código QR" class="mx-auto" style="display:none;">
-      <p id="qrStatus" class="text-sm text-slate-500 mx-auto"></p>
-    </div>
-    <div id="qrConnectedCard" class="qr-connected-card hidden">
-      <div class="qr-confetti" aria-hidden="true">
-        <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-      </div>
-      <div class="flex items-center gap-4">
-        <div class="qr-badge">
-          <svg width="44" height="44" viewBox="0 0 64 64" fill="none" aria-hidden="true">
-            <circle cx="32" cy="32" r="28" fill="#0f766e"/>
-            <path d="M22 33.5l6.5 6.5L42 26" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-        </div>
-        <div>
-          <div class="qr-connected-title">Conectado com sucesso</div>
-          <div class="qr-connected-subtitle">WhatsApp online. Pode fechar esta janela.</div>
-        </div>
-      </div>
-      <div class="qr-sparkle" aria-hidden="true"></div>
-    </div>
-    <div class="qr-status-grid mt-4" id="qrStatusGrid" aria-live="polite">
-      <div><span>Status</span><strong id="qrStatusConnection">-</strong></div>
-      <div><span>Conectado</span><strong id="qrStatusConnected">-</strong></div>
-      <div><span>QR ativo</span><strong id="qrStatusHasQr">-</strong></div>
-      <div><span>Ultimo erro</span><strong id="qrStatusError">-</strong></div>
-    </div>
-    <p id="qrStatusNote" class="text-xs text-slate-500 mt-3">Se o QR nao aparecer, reinicie a sessao e aguarde alguns minutos.</p>
-    <div id="qrActions" class="mt-4 space-y-2">
-      <button onclick="refreshQR()" class="w-full px-4 py-2 rounded-xl border border-primary text-primary hover:bg-primary/5">Atualizar QR</button>
-      <button onclick="openQrResetConfirm()" class="w-full px-4 py-2 rounded-xl bg-primary text-white hover:opacity-90">Reiniciar sessao</button>
-    </div>
-  </div>
-</div>
-<div id="qrResetOverlay" class="qr-reset-overlay">
-  <div class="qr-reset-card">
-    <h3>Antes de reiniciar</h3>
-    <p>Saia de todas as conexoes WhatsApp Web/desktop vinculadas a este numero. Isso evita conflito e permite gerar um novo QR.</p>
-    <label class="qr-reset-check">
-      <input id="qrResetConfirm" type="checkbox">
-      Ja desconectei todas as sessoes
-    </label>
-    <div class="qr-reset-actions">
-      <button id="qrResetConfirmBtn" class="px-4 py-2 rounded-xl bg-primary text-white hover:opacity-90">Confirmar e reiniciar</button>
-      <button id="qrResetCancelBtn" class="px-4 py-2 rounded-xl border border-mid text-slate-600 hover:bg-light">Cancelar</button>
-    </div>
-  </div>
-</div>
-<style>
-  .qr-status-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
-    padding: 12px;
-    border-radius: 14px;
-    border: 1px solid #e2e8f0;
-    background: #f8fafc;
-    font-size: 12px;
-    color: #475569;
-  }
-  .qr-status-grid span {
-    display: block;
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: #94a3b8;
-  }
-  .qr-status-grid strong {
-    display: block;
-    font-weight: 600;
-    color: #0f172a;
-  }
-  .qr-connected-card {
-    border: 1px solid #ccfbf1;
-    background: linear-gradient(135deg, #ecfeff, #f0fdf4);
-    border-radius: 16px;
-    padding: 16px;
-    margin-top: 12px;
-    position: relative;
-    overflow: hidden;
-  }
-  .qr-badge {
-    width: 56px;
-    height: 56px;
-    border-radius: 16px;
-    background: #ffffff;
-    display: grid;
-    place-items: center;
-    box-shadow: 0 12px 22px rgba(15, 118, 110, 0.18);
-  }
-  .qr-connected-title {
-    font-weight: 600;
-    color: #0f172a;
-  }
-  .qr-connected-subtitle {
-    font-size: 12px;
-    color: #475569;
-  }
-  .qr-confetti span {
-    position: absolute;
-    width: 8px;
-    height: 14px;
-    border-radius: 3px;
-    opacity: 0.8;
-    animation: qr-confetti-fall 2.6s ease-in-out infinite;
-  }
-  .qr-confetti span:nth-child(1) { left: 8%; background: #f97316; animation-delay: 0s; }
-  .qr-confetti span:nth-child(2) { left: 18%; background: #22c55e; animation-delay: 0.2s; }
-  .qr-confetti span:nth-child(3) { left: 32%; background: #06b6d4; animation-delay: 0.4s; }
-  .qr-confetti span:nth-child(4) { left: 46%; background: #facc15; animation-delay: 0.1s; }
-  .qr-confetti span:nth-child(5) { left: 60%; background: #fb7185; animation-delay: 0.35s; }
-  .qr-confetti span:nth-child(6) { left: 74%; background: #a855f7; animation-delay: 0.5s; }
-  .qr-confetti span:nth-child(7) { left: 86%; background: #34d399; animation-delay: 0.25s; }
-  .qr-sparkle {
-    position: absolute;
-    right: 16px;
-    bottom: 10px;
-    width: 64px;
-    height: 64px;
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(15, 118, 110, 0.4), transparent 70%);
-    animation: qr-pulse 2.4s ease-in-out infinite;
-  }
-  @keyframes qr-confetti-fall {
-    0% { transform: translateY(-20px) rotate(0deg); opacity: 0; }
-    30% { opacity: 0.9; }
-    100% { transform: translateY(120px) rotate(220deg); opacity: 0; }
-  }
-  @keyframes qr-pulse {
-    0%, 100% { transform: scale(1); opacity: 0.35; }
-    50% { transform: scale(1.08); opacity: 0.6; }
-  }
-  .qr-reset-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(15, 23, 42, 0.55);
-    display: none;
-    align-items: center;
-    justify-content: center;
-    padding: 16px;
-    z-index: 60;
-  }
-  .qr-reset-overlay.active {
-    display: flex;
-  }
-  .qr-reset-card {
-    background: #ffffff;
-    border-radius: 16px;
-    padding: 18px;
-    max-width: 420px;
-    width: 100%;
-    box-shadow: 0 18px 40px rgba(15, 118, 110, 0.2);
-    border: 1px solid #e2e8f0;
-  }
-  .qr-reset-card h3 {
-    margin: 0 0 8px;
-    font-size: 16px;
-    font-weight: 600;
-    color: #0f172a;
-  }
-  .qr-reset-card p {
-    margin: 0 0 12px;
-    font-size: 13px;
-    color: #475569;
-  }
-  .qr-reset-check {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    color: #475569;
-    margin-bottom: 12px;
-  }
-  .qr-reset-actions {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-  .countdown {
-    font-weight: 600;
-    color: #0f766e;
-  }
-</style>
-
-<!-- Modal for AI Test -->
-<div id="aiTestModal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50 px-4">
-  <div class="bg-white rounded-2xl p-6 w-full max-w-lg mx-auto relative">
-    <button id="closeAiTestModal" class="absolute top-3 right-3 text-slate-400 hover:text-dark">&times;</button>
-    <h3 class="text-lg font-semibold mb-2">Testar IA</h3>
-    <p class="text-xs text-slate-500 mb-4">Envie uma mensagem e veja como o provedor configurado responde.</p>
-    <form id="aiTestForm" class="space-y-3">
-      <label class="text-xs text-slate-500">Mensagem para teste</label>
-      <textarea id="aiTestMessage" rows="4" class="w-full px-3 py-2 rounded-xl border border-mid bg-light" required></textarea>
-      <div class="flex gap-3 items-center">
-        <button type="submit" id="aiTestSubmit" class="px-4 py-2 rounded-xl bg-primary text-white font-medium hover:opacity-90">
-          Enviar para IA
-        </button>
-        <span id="aiTestStatus" class="text-xs text-slate-500"></span>
-      </div>
-      <div id="aiTestResult" class="text-sm text-dark bg-light border border-mid rounded-xl px-3 py-2 min-h-[80px] whitespace-pre-line"></div>
-    </form>
-  </div>
-</div>
-
+<?php renderCreateModal(); ?>
+<?php renderQrModal(); ?>
+<?php renderQrResetOverlay(); ?>
+<?php renderAiTestModal(); ?>
 <script>
 let activeQrInstanceId = null;
 let qrPollingId = null;
@@ -4587,8 +1349,12 @@ document.getElementById('qrResetCancelBtn')?.addEventListener('click', (event) =
         throw new Error(errorMessage);
       }
 
+      // Use message from server response or default
+      const serverMessage = result?.message;
       const warning = result?.warning;
-      const message = warning ? `Config salva, porém: ${warning}` : 'Configurações salvas com sucesso';
+      const message = warning 
+        ? `Config salva, porém: ${warning}` 
+        : (serverMessage || 'Configurações salvas com sucesso');
       const statusMode = warning ? 'warning' : 'success';
       updateStatus(message, statusMode);
     } catch (error) {
@@ -4919,26 +1685,44 @@ document.getElementById('qrResetCancelBtn')?.addEventListener('click', (event) =
       listEl.innerHTML = '<div class="text-xs text-slate-400">Nenhum calendário cadastrado.</div>';
       return;
     }
+    // Deduplicate and normalize calendars
+    const seen = new Set();
+    const uniqueItems = items.filter(item => {
+      const id = (item.calendar_id || '').trim();
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+    // Find the active/default calendar index
+    const activeIndex = uniqueItems.findIndex(item => item.is_default);
+    const activeNum = activeIndex >= 0 ? activeIndex + 1 : 1;
     listEl.innerHTML = '';
-    items.forEach(item => {
+    uniqueItems.forEach((item, idx) => {
+      const num = idx + 1;
+      const isActive = item.is_default;
       const wrapper = document.createElement('div');
-      wrapper.className = 'rounded-xl border border-mid/70 bg-light/60 p-3 space-y-2';
+      wrapper.className = 'rounded-xl border ' + (isActive ? 'border-primary/50 bg-primary/5' : 'border-mid/70 bg-light/60') + ' p-3 space-y-2';
       const summary = item.summary || item.calendar_id || 'Calendário';
       const timezone = item.timezone || 'Timezone não definido';
       const availabilityHint = item.availability ? 'Disponibilidade configurada' : 'Sem disponibilidade';
       wrapper.innerHTML = `
         <div class="flex items-start justify-between gap-3">
           <div>
-            <div class="font-medium text-slate-800">${summary}</div>
-            <div class="text-xs text-slate-500">${item.calendar_id}</div>
-            <div class="text-[11px] text-slate-400">${timezone} • ${availabilityHint}</div>
+            <div class="flex items-center gap-2">
+              <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-primary text-white text-xs font-bold">${num}</span>
+              <div class="font-medium text-slate-800">${summary}</div>
+              ${isActive ? '<span class="text-[10px] px-2 py-0.5 rounded-full bg-primary text-white">Ativo</span>' : ''}
+            </div>
+            <div class="text-xs text-slate-500 ml-8">ID: ${item.calendar_id}</div>
+            <div class="text-[11px] text-slate-400 ml-8">${timezone} • ${availabilityHint}</div>
           </div>
           <div class="flex flex-col gap-2">
-            <button type="button" data-action="default" data-calendar-id="${item.calendar_id}"
-                    class="text-xs px-3 py-1 rounded-full border border-primary text-primary hover:bg-primary/5">
-              ${item.is_default ? 'Padrão' : 'Definir padrão'}
+            <button type="button" data-action="default" data-calendar-num="${num}" data-calendar-id="${item.calendar_id}"
+                    class="text-xs px-3 py-1 rounded-full border ${isActive ? 'border-slate-300 text-slate-400 cursor-not-allowed' : 'border-primary text-primary hover:bg-primary/5'}"
+                    ${isActive ? 'disabled' : ''}>
+              ${isActive ? 'Ativo' : 'Ativar'}
             </button>
-            <button type="button" data-action="remove" data-calendar-id="${item.calendar_id}"
+            <button type="button" data-action="remove" data-calendar-num="${num}" data-calendar-id="${item.calendar_id}"
                     class="text-xs px-3 py-1 rounded-full border border-red-300 text-red-500 hover:bg-red-50">
               Remover
             </button>
@@ -4970,6 +1754,43 @@ document.getElementById('qrResetCancelBtn')?.addEventListener('click', (event) =
     setStatus('Calendários do Google carregados.', 'success');
   };
 
+  const restoreAvailabilityRanges = (calendars) => {
+    console.log('restoreAvailabilityRanges called with:', JSON.stringify(calendars, null, 2));
+    if (!Array.isArray(calendars) || calendars.length === 0) {
+      console.log('No calendars array or empty');
+      return;
+    }
+    // Find the first calendar with availability data
+    const calendarWithAvailability = calendars.find(cal => cal.availability && cal.availability.days);
+    console.log('calendarWithAvailability:', JSON.stringify(calendarWithAvailability, null, 2));
+    if (!calendarWithAvailability) {
+      return;
+    }
+    const availability = calendarWithAvailability.availability;
+    console.log('availability:', JSON.stringify(availability, null, 2));
+    if (!availability || !availability.days) {
+      console.log('No availability or days');
+      return;
+    }
+    // Reset the builder first
+    resetAvailabilityBuilder();
+    // Iterate over availability.days and add rows
+    const days = availability.days;
+    for (const [dayKey, ranges] of Object.entries(days)) {
+      if (Array.isArray(ranges)) {
+        for (const range of ranges) {
+          if (range && range.start && range.end) {
+            addAvailabilityRow(dayKey, range.start, range.end);
+          }
+        }
+      }
+    }
+    // Update the hidden input with the restored availability data
+    if (typeof updateAvailabilityInput === 'function') {
+      updateAvailabilityInput();
+    }
+  };
+
   const loadCalendarConfig = async () => {
     setStatus('Carregando configuração...', 'info');
     const url = buildUrl('api/calendar/config', { instance: instanceId });
@@ -4984,6 +1805,7 @@ document.getElementById('qrResetCancelBtn')?.addEventListener('click', (event) =
       setStatus(connected ? `Conectado: ${payload.account?.calendar_email || 'conta Google'}` : 'Não conectado', connected ? 'success' : 'warning');
     }
     renderCalendarList(payload.calendars || []);
+    restoreAvailabilityRanges(payload.calendars || []);
     if (connected && !pendingAuth && googleSelect && googleSelect.options.length <= 1) {
       try {
         await loadGoogleCalendars();
@@ -5071,19 +1893,21 @@ document.getElementById('qrResetCancelBtn')?.addEventListener('click', (event) =
       }
       const timezone = timezoneInput?.value.trim() || null;
       const availabilityPayload = collectAvailabilityPayload();
+      console.log('Availability payload:', JSON.stringify(availabilityPayload, null, 2));
       const payload = {
         calendar_id: calendarId,
         timezone,
         availability: availabilityPayload,
         is_default: Boolean(defaultCheckbox?.checked)
       };
+      console.log('Full payload:', JSON.stringify(payload, null, 2));
       const url = buildUrl('api/calendar/calendars', { instance: instanceId });
       await fetchJson(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      setSaveStatus('Calendário salvo.', 'success');
+      setSaveStatus('Calendário salvo. Duplicatas serão removidas.', 'success');
       await loadCalendarConfig();
     } catch (error) {
       setSaveStatus(`Erro: ${error.message}`, 'error');
@@ -5094,6 +1918,7 @@ document.getElementById('qrResetCancelBtn')?.addEventListener('click', (event) =
       const target = event.target;
       if (!(target instanceof HTMLElement)) return;
       const action = target.dataset.action;
+      const calendarNum = target.dataset.calendarNum;
       const calendarId = target.dataset.calendarId;
       if (!action || !calendarId) return;
       try {
@@ -5104,11 +1929,12 @@ document.getElementById('qrResetCancelBtn')?.addEventListener('click', (event) =
           await fetchJson(url, { method: 'DELETE' });
           await loadCalendarConfig();
         } else if (action === 'default') {
+          // Set as active by calendar_num
           const url = buildUrl('api/calendar/default', { instance: instanceId });
           await fetchJson(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ calendar_id: calendarId })
+            body: JSON.stringify({ calendar_num: parseInt(calendarNum, 10) })
           });
           await loadCalendarConfig();
         }
@@ -5785,6 +2611,8 @@ document.getElementById('qrResetCancelBtn')?.addEventListener('click', (event) =
   const autoPauseSection = document.getElementById('autoPauseSection');
   const audioTranscriptionSection = document.getElementById('audioTranscriptionSection');
   const secretarySection = document.getElementById('secretarySection');
+  const metaFieldIds = ['quickConfigMetaAccessToken', 'quickConfigMetaBusinessAccountId', 'quickConfigMetaTelephoneId'];
+  const metaFieldInputs = metaFieldIds.map(id => document.getElementById(id)).filter(Boolean);
 
   const toBase64 = (value) => {
     const normalized = value === null || value === undefined ? '' : String(value);
@@ -5801,6 +2629,14 @@ document.getElementById('qrResetCancelBtn')?.addEventListener('click', (event) =
   const syncEncodedValue = () => {
     encodedInput.value = toBase64(baseUrlInput.value || '');
   };
+  const setMetaFieldRequired = (isMeta) => {
+    metaFieldInputs.forEach(input => {
+      input.required = isMeta;
+    });
+  };
+  const updateBaseUrlRequirement = (isBaileysOrWeb) => {
+    baseUrlInput.required = isBaileysOrWeb;
+  };
   const syncIntegrationFields = () => {
     const integrationType = integrationTypeSelect.value;
     const isBaileysOrWeb = integrationType === 'baileys' || integrationType === 'web';
@@ -5811,6 +2647,8 @@ document.getElementById('qrResetCancelBtn')?.addEventListener('click', (event) =
       baileysFields.classList.add('hidden');
       metaFields.classList.remove('hidden');
     }
+    updateBaseUrlRequirement(isBaileysOrWeb);
+    setMetaFieldRequired(integrationType === 'meta');
   };
   const applyIntegrationVisibility = () => {
     const integrationType = integrationTypeSelect.value;
@@ -5847,6 +2685,107 @@ document.getElementById('qrResetCancelBtn')?.addEventListener('click', (event) =
   syncEncodedValue();
   syncIntegrationFields();
   applyIntegrationVisibility();
+
+  // Quick Config AJAX Save
+  // Auto-update Base URL when porta changes - set up on page load
+  (function() {
+    const portaInput = document.querySelector('input[name="instance_port"]');
+    const baseUrlInput = document.getElementById('quickConfigBaseUrlInput');
+    if (portaInput && baseUrlInput) {
+      // Make Base URL readonly - it should be auto-calculated from porta
+      baseUrlInput.setAttribute('readonly', true);
+      baseUrlInput.title = 'Este campo é calculado automaticamente a partir da Porta';
+      
+      portaInput.addEventListener('change', function() {
+        const porta = this.value || '3000';
+        baseUrlInput.value = 'http://127.0.0.1:' + porta;
+        // Also update the encoded value
+        const encodedInput = document.getElementById('quickConfigBaseUrlEncoded');
+        if (encodedInput) {
+          encodedInput.value = btoa(baseUrlInput.value);
+        }
+      });
+    }
+  })();
+  
+  window.saveQuickConfig = async function() {
+    const form = document.getElementById('quickConfigForm');
+    const messageArea = document.getElementById('quickConfigMessageArea');
+    const saveBtn = document.getElementById('quickConfigSaveButton');
+    
+    if (!form) {
+      console.error('Quick config form not found');
+      return;
+    }
+    
+    // Show loading
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Salvando...';
+    messageArea.innerHTML = '';
+    
+    try {
+      // Get form data
+      const formData = new FormData(form);
+      
+      // Get the base URL value and encode it (use existing baseUrlInput from closure)
+      const baseUrlInput = document.getElementById('quickConfigBaseUrlInput');
+      if (baseUrlInput) {
+        const base64Value = btoa(baseUrlInput.value || '');
+        formData.set('instance_base_url_b64', base64Value);
+      }
+      
+      // Debug: log form data
+      console.log('Saving quick config with data:');
+      for (let [key, value] of formData.entries()) {
+        console.log(key + ': ' + value);
+      }
+      
+      // Use explicit POST URL
+      const url = window.location.pathname + window.location.search;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest',
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: new URLSearchParams(formData).toString()
+      });
+      
+      console.log('Response status:', response.status);
+      const text = await response.text();
+      console.log('Response text:', text.substring(0, 500));
+      
+      // Try to parse JSON
+      let result;
+      try {
+        result = JSON.parse(text);
+      } catch (e) {
+        // If not JSON, check if it was successful
+        if (response.ok && text.includes('success')) {
+          result = { success: true, message: 'Configurações salvas!' };
+        } else {
+          result = { success: false, error: 'Resposta inválida do servidor' };
+        }
+      }
+      
+      if (result.success) {
+        messageArea.innerHTML = '<p class="text-xs text-success mt-1">' + (result.message || 'Configurações salvas com sucesso!') + '</p>';
+        setTimeout(() => {
+          window.location.reload();
+        }, 1500);
+      } else {
+        messageArea.innerHTML = '<p class="text-xs text-error mt-1">' + (result.error || 'Erro ao salvar') + '</p>';
+      }
+      
+    } catch (error) {
+      console.error('Quick save error:', error);
+      messageArea.innerHTML = '<p class="text-xs text-error mt-1">Erro: ' + error.message + '</p>';
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Salvar';
+    }
+  };
+
   form.addEventListener('submit', () => {
     syncEncodedValue();
   });
@@ -5915,7 +2854,7 @@ const averageTaxarDisplay = document.getElementById('averageTaxar');
     return steps;
   };
 
-  helpButton.addEventListener('click', () => {
+  helpTourButton.addEventListener('click', () => {
     const tour = introJs();
     tour.setOptions({
       steps: buildSteps(),
@@ -5956,6 +2895,36 @@ const averageTaxarDisplay = document.getElementById('averageTaxar');
 
   const defaultTarget = buttons.find((btn) => btn.classList.contains('active'))?.dataset.tabTarget || buttons[0].dataset.tabTarget;
   activateTab(defaultTarget);
+})();
+</script>
+<script>
+(function () {
+  document.addEventListener('click', async (event) => {
+    const trigger = event.target.closest('[data-copy-snippet]');
+    if (!trigger) return;
+    const targetId = trigger.dataset.copySnippet;
+    const textarea = document.getElementById(targetId);
+    if (!textarea) return;
+    const text = textarea.value || textarea.textContent || '';
+    if (!text.trim()) {
+      return;
+    }
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        textarea.select();
+        document.execCommand('copy');
+      }
+      const original = trigger.textContent;
+      trigger.textContent = 'Copiado';
+      setTimeout(() => {
+        trigger.textContent = original;
+      }, 1200);
+    } catch (err) {
+      console.error('copy snippet failed', err);
+    }
+  });
 })();
 </script>
 
@@ -6294,6 +3263,61 @@ const averageTaxarDisplay = document.getElementById('averageTaxar');
 
   // Make sendTemplate function global
   window.sendTemplate = sendTemplate;
+})();
+</script>
+<script>
+(function () {
+  const overlay = document.getElementById('debugLogOverlay');
+  const openButton = document.getElementById('openDebugLogsButton');
+  const closeButton = document.getElementById('closeDebugLogOverlay');
+  const outputEl = document.getElementById('debugLogOutput');
+  const sourceLabel = document.getElementById('debugLogSourceLabel');
+  const logButtons = overlay ? Array.from(overlay.querySelectorAll('[data-log-type]')) : [];
+  const logs = <?= json_encode($baileysDebugLogs, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
+  const logPaths = <?= json_encode($baileysDebugPaths, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP) ?>;
+  let activeType = 'out';
+
+  if (!overlay || !outputEl || !sourceLabel) {
+    return;
+  }
+
+  function setActiveType(type) {
+    activeType = type;
+    logButtons.forEach(btn => {
+      const isActive = btn.dataset.logType === type;
+      btn.classList.toggle('bg-slate-900', isActive);
+      btn.classList.toggle('text-white', isActive);
+      btn.classList.toggle('border-slate-900', isActive);
+    });
+    outputEl.textContent = logs[type] || 'Nenhum log disponível para ' + type + '.';
+    const pathText = logPaths[type] || 'não disponível';
+    sourceLabel.textContent = 'Arquivo: ' + pathText;
+  }
+
+  logButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      setActiveType(btn.dataset.logType || 'out');
+    });
+  });
+
+  openButton?.addEventListener('click', event => {
+    event.preventDefault();
+    if (openButton.disabled) {
+      return;
+    }
+    overlay.classList.remove('hidden');
+    setActiveType(activeType);
+  });
+
+  closeButton?.addEventListener('click', () => {
+    overlay.classList.add('hidden');
+  });
+
+  overlay.addEventListener('click', event => {
+    if (event.target === overlay) {
+      overlay.classList.add('hidden');
+    }
+  });
 })();
 </script>
 

@@ -9,6 +9,8 @@
 /auth_inst*/
 logs/*
 logs/
+logs/*.log
+logs/**/*.log
 
 # Assets gerados
 assets/uploads/
@@ -23,8 +25,26 @@ yarn-error.log*
 *.db
 chat_data.db
 
+# Backup files - DO NOT COMMIT THESE
+*.bak
+*.bak_*
+*.db-bak
+*.db_bak
+
 # Sistema
 .DS_Store
 Thumbs.db
 debug.log
 gemini.php
+.gitnexus
+
+# Root-level log files
+*.log
+instance_*.log
+master-*.log
+worker-*.log
+health-*.log
+server.log
+performance.log
+retorno.log
+critical.log

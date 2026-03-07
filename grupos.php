@@ -2,8 +2,8 @@
 require_once __DIR__ . '/vendor/autoload.php';
 require_once __DIR__ . '/instance_data.php';
 require_once __DIR__ . '/external_auth.php';
-date_default_timezone_set('America/Fortaleza');
-$displayTz = new DateTimeZone('America/Fortaleza');
+require_once __DIR__ . '/includes/timezone.php';
+$displayTz = new DateTimeZone(getApplicationTimezone());
 $dbTz = new DateTimeZone('UTC');
 ensureExternalUsersSchema();
 

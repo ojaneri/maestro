@@ -80,6 +80,52 @@ const AUTH_STATE_TABLE_SQL = `
     )
 `
 
+const DIAG_EVENTS_TABLE_SQL = `
+    CREATE TABLE IF NOT EXISTS diag_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        instance_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        state TEXT,
+        connection TEXT,
+        event_payload TEXT,
+        last_disconnect_reason TEXT,
+        last_disconnect_status_code INTEGER,
+        attempt INTEGER DEFAULT 0,
+        message_count INTEGER DEFAULT 0,
+        metadata TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+`
+
+const DIAG_HEARTBEATS_TABLE_SQL = `
+    CREATE TABLE IF NOT EXISTS diag_heartbeats (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        instance_id TEXT NOT NULL,
+        uptime_sec REAL,
+        mem_rss_mb REAL,
+        heap_used_mb REAL,
+        cpu_user_sec REAL,
+        cpu_system_sec REAL,
+        cpu_load REAL,
+        event_loop_lag_ms REAL,
+        listener_count INTEGER,
+        socket_count INTEGER,
+        http_ping_ms REAL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+`
+
+const DIAG_INSTANCE_STATS_TABLE_SQL = `
+    CREATE TABLE IF NOT EXISTS diag_instance_stats (
+        instance_id TEXT PRIMARY KEY,
+        last_disconnect_reason TEXT,
+        last_disconnect_status_code INTEGER,
+        last_disconnect_at DATETIME,
+        reconnect_count INTEGER DEFAULT 0,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+`
+
 const META_TEMPLATES_TABLE_SQL = `
     CREATE TABLE IF NOT EXISTS meta_templates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,27 +179,42 @@ function initDatabase() {
                 reject(err)
             } else {
                 console.log('Connected to SQLite chat database')
-                createTables(db)
-                    .then(() => ensureSettingsSchema(db))
-                    .then(() => ensureInstancesSchema(db))
-                    .then(() => ensureDirectionColumn(db))
-                    .then(() => ensureMetadataColumn(db))
-                    .then(() => ensureScheduledSchema(db))
-                    .then(() => ensureContactContextSchema(db))
-                    .then(() => ensureEventLogsSchema(db))
-                    .then(() => ensurePersistentVariablesSchema(db))
-                    .then(() => ensureGroupMonitoringSchema(db))
-                    .then(() => ensureGroupMessagesSchema(db))
-                    .then(() => ensureGroupSchedulesSchema(db))
-                    .then(() => ensureGroupAutoRepliesSchema(db))
-                    .then(() => ensureCalendarSchema(db))
-                    .then(() => ensureTemperatureColumn(db))
-                    .then(() => ensureTaxaRColumn(db))
-                    .then(() => ensureMetaTemplatesSchema(db))
-                    .then(() => ensureMetaWebhookEventsSchema(db))
-                    .then(() => ensureMetaInstanceConfigSchema(db))
-                    .then(() => resolve(db))
-                    .catch(reject)
+                db.serialize(() => {
+                    db.run('PRAGMA journal_mode = WAL', (err) => {
+                        if (err) {
+                            console.error('Error setting WAL mode:', err.message)
+                            reject(err)
+                        } else {
+                            console.log('Database journal mode set to WAL')
+                            createTables(db)
+                                .then(() => ensureSettingsSchema(db))
+                                .then(() => ensureInstancesSchema(db))
+                                .then(() => ensureDirectionColumn(db))
+                                .then(() => ensureMetadataColumn(db))
+                                .then(() => ensureMessagesSessionColumn(db))
+                                .then(() => ensureQuotedColumns(db))
+                                .then(() => ensureScheduledSchema(db))
+                                .then(() => ensureContactContextSchema(db))
+                                .then(() => ensureContactContextSessionColumn(db))
+                                .then(() => ensureEventLogsSchema(db))
+                                .then(() => ensurePersistentVariablesSchema(db))
+                                .then(() => ensureGroupMonitoringSchema(db))
+                                .then(() => ensureGroupMessagesSchema(db))
+                                .then(() => ensureGroupSchedulesSchema(db))
+                                .then(() => ensureGroupAutoRepliesSchema(db))
+                                .then(() => ensureCalendarSchema(db))
+                                .then(() => ensureTemperatureColumn(db))
+                                .then(() => ensureTaxaRColumn(db))
+                                .then(() => ensureMetaTemplatesSchema(db))
+                                .then(() => ensureMetaWebhookEventsSchema(db))
+                                .then(() => ensureMetaInstanceConfigSchema(db))
+                                .then(() => ensureLIDPNColumns(db))
+                                .then(() => ensureLIDMessageColumns(db))
+                                .then(() => resolve(db))
+                                .catch(reject)
+                        }
+                    })
+                })
             }
         })
     })
@@ -282,8 +343,14 @@ function createTables(db) {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 instance_id TEXT NOT NULL,
                 remote_jid TEXT NOT NULL,
+                session_id TEXT NOT NULL DEFAULT '',
                 role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
                 content TEXT NOT NULL,
+                direction TEXT NOT NULL CHECK(direction IN ('inbound','outbound')) DEFAULT 'inbound',
+                metadata TEXT,
+                wa_message_id TEXT,
+                quoted_message_id TEXT,
+                quoted_preview TEXT,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
@@ -435,12 +502,16 @@ const contactMetadataSQL = `
             AUTH_STATE_TABLE_SQL,
             META_TEMPLATES_TABLE_SQL,
             META_WEBHOOK_EVENTS_TABLE_SQL,
-            META_INSTANCE_CONFIG_TABLE_SQL
+            META_INSTANCE_CONFIG_TABLE_SQL,
+            DIAG_EVENTS_TABLE_SQL,
+            DIAG_HEARTBEATS_TABLE_SQL,
+            DIAG_INSTANCE_STATS_TABLE_SQL
         ]
 
         const indexes = [
             'CREATE INDEX IF NOT EXISTS idx_messages_instance ON messages(instance_id)',
             'CREATE INDEX IF NOT EXISTS idx_messages_contact ON messages(remote_jid)',
+            'CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)',
             'CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp)',
             'CREATE INDEX IF NOT EXISTS idx_messages_instance_contact ON messages(instance_id, remote_jid)',
             'CREATE INDEX IF NOT EXISTS idx_threads_instance_contact ON threads(instance_id, remote_jid)',
@@ -459,6 +530,7 @@ const contactMetadataSQL = `
             'CREATE INDEX IF NOT EXISTS idx_whatsapp_cache_phone ON whatsapp_number_cache(phone)',
             'CREATE INDEX IF NOT EXISTS idx_contact_context_instance ON contact_context(instance_id)',
             'CREATE INDEX IF NOT EXISTS idx_contact_context_remote ON contact_context(remote_jid)',
+            'CREATE INDEX IF NOT EXISTS idx_contact_context_session ON contact_context(session_id)',
             'CREATE INDEX IF NOT EXISTS idx_event_logs_instance ON event_logs(instance_id)',
             'CREATE INDEX IF NOT EXISTS idx_event_logs_remote ON event_logs(remote_jid)',
             'CREATE INDEX IF NOT EXISTS idx_persistent_vars_instance ON persistent_variables(instance_id)',
@@ -471,6 +543,12 @@ const contactMetadataSQL = `
             'CREATE INDEX IF NOT EXISTS idx_meta_webhook_events_timestamp ON meta_webhook_events(timestamp)',
             'CREATE INDEX IF NOT EXISTS idx_meta_config_instance ON meta_instance_config(instance_id)',
             'CREATE INDEX IF NOT EXISTS idx_meta_config_phone ON meta_instance_config(phone_number)'
+            ,
+            'CREATE INDEX IF NOT EXISTS idx_diag_events_instance ON diag_events(instance_id)',
+            'CREATE INDEX IF NOT EXISTS idx_diag_events_created ON diag_events(created_at)',
+            'CREATE INDEX IF NOT EXISTS idx_diag_heartbeats_instance ON diag_heartbeats(instance_id)',
+            'CREATE INDEX IF NOT EXISTS idx_diag_heartbeats_created ON diag_heartbeats(created_at)',
+            'CREATE INDEX IF NOT EXISTS idx_diag_instance_stats_instance ON diag_instance_stats(instance_id)'
         ]
 
         db.serialize(() => {
@@ -598,6 +676,71 @@ function ensureMetadataColumn(db) {
     })
 }
 
+function ensureMessagesSessionColumn(db) {
+    return new Promise((resolve, reject) => {
+        db.all(`PRAGMA table_info(messages)`, (err, rows) => {
+            if (err) {
+                return reject(err)
+            }
+            const hasSession = rows.some(row => row.name === 'session_id')
+            if (hasSession) {
+                return resolve()
+            }
+            db.run(
+                `ALTER TABLE messages ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`,
+                (alterErr) => {
+                    if (alterErr) {
+                        return reject(alterErr)
+                    }
+                    resolve()
+                }
+            )
+        })
+    })
+}
+
+function ensureQuotedColumns(db) {
+    return new Promise((resolve, reject) => {
+        db.all(`PRAGMA table_info(messages)`, (err, rows) => {
+            if (err) {
+                return reject(err)
+            }
+            const hasWaId = rows.some(row => row.name === 'wa_message_id')
+            const hasQuotedId = rows.some(row => row.name === 'quoted_message_id')
+            const hasQuotedPreview = rows.some(row => row.name === 'quoted_preview')
+            const tasks = []
+            if (!hasWaId) {
+                tasks.push(new Promise((res, rej) => {
+                    db.run(`ALTER TABLE messages ADD COLUMN wa_message_id TEXT`, alterErr => {
+                        if (alterErr) rej(alterErr)
+                        else res()
+                    })
+                }))
+            }
+            if (!hasQuotedId) {
+                tasks.push(new Promise((res, rej) => {
+                    db.run(`ALTER TABLE messages ADD COLUMN quoted_message_id TEXT`, alterErr => {
+                        if (alterErr) rej(alterErr)
+                        else res()
+                    })
+                }))
+            }
+            if (!hasQuotedPreview) {
+                tasks.push(new Promise((res, rej) => {
+                    db.run(`ALTER TABLE messages ADD COLUMN quoted_preview TEXT`, alterErr => {
+                        if (alterErr) rej(alterErr)
+                        else res()
+                    })
+                }))
+            }
+            if (!tasks.length) {
+                return resolve()
+            }
+            Promise.all(tasks).then(() => resolve()).catch(reject)
+        })
+    })
+}
+
 function ensureScheduledSchema(db) {
     return new Promise((resolve, reject) => {
         db.all(`PRAGMA table_info(scheduled_messages)`, (err, rows) => {
@@ -659,16 +802,40 @@ function ensureContactContextSchema(db) {
             CREATE TABLE IF NOT EXISTS contact_context (
                 instance_id TEXT NOT NULL,
                 remote_jid TEXT NOT NULL,
+                session_id TEXT NOT NULL DEFAULT '',
                 key TEXT NOT NULL,
                 value TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (instance_id, remote_jid, key)
+                PRIMARY KEY (instance_id, remote_jid, session_id, key)
             )
         `
         db.run(sql, err => {
             if (err) reject(err)
             else resolve()
+        })
+    })
+}
+
+function ensureContactContextSessionColumn(db) {
+    return new Promise((resolve, reject) => {
+        db.all(`PRAGMA table_info(contact_context)`, (err, rows) => {
+            if (err) {
+                return reject(err)
+            }
+            const hasSession = rows.some(row => row.name === 'session_id')
+            if (hasSession) {
+                return resolve()
+            }
+            db.run(
+                `ALTER TABLE contact_context ADD COLUMN session_id TEXT NOT NULL DEFAULT ''`,
+                (alterErr) => {
+                    if (alterErr) {
+                        return reject(alterErr)
+                    }
+                    resolve()
+                }
+            )
         })
     })
 }
@@ -1041,29 +1208,40 @@ async function getCalendarAccount(instanceId) {
 async function upsertCalendarAccount(instanceId, payload) {
     const db = new sqlite3.Database(DB_PATH)
     const {
-        calendar_email: email = null,
-        access_token: accessToken = null,
-        refresh_token: refreshToken = null,
-        token_expiry: tokenExpiry = null,
-        scope = null
+        calendar_email: email,
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        token_expiry: tokenExpiry,
+        scope
     } = payload || {}
     return new Promise((resolve, reject) => {
         const sql = `
             INSERT INTO calendar_accounts (instance_id, calendar_email, access_token, refresh_token, token_expiry, scope, updated_at)
             VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(instance_id) DO UPDATE SET
-                calendar_email = excluded.calendar_email,
-                access_token = excluded.access_token,
-                refresh_token = excluded.refresh_token,
-                token_expiry = excluded.token_expiry,
-                scope = excluded.scope,
+                calendar_email = COALESCE(excluded.calendar_email, calendar_accounts.calendar_email),
+                access_token = COALESCE(excluded.access_token, calendar_accounts.access_token),
+                refresh_token = COALESCE(excluded.refresh_token, calendar_accounts.refresh_token),
+                token_expiry = COALESCE(excluded.token_expiry, calendar_accounts.token_expiry),
+                scope = COALESCE(excluded.scope, calendar_accounts.scope),
                 updated_at = CURRENT_TIMESTAMP
         `
-        db.run(sql, [instanceId, email, accessToken, refreshToken, tokenExpiry, scope], function(err) {
-            db.close()
-            if (err) reject(err)
-            else resolve({ updated: this.changes })
-        })
+        db.run(
+            sql,
+            [
+                instanceId,
+                email ?? null,
+                accessToken ?? null,
+                refreshToken ?? null,
+                tokenExpiry ?? null,
+                scope ?? null
+            ],
+            function(err) {
+                db.close()
+                if (err) reject(err)
+                else resolve({ updated: this.changes })
+            }
+        )
     })
 }
 
@@ -1186,22 +1364,62 @@ async function setDefaultCalendarConfig(instanceId, calendarId) {
 // ===== MESSAGES MANAGEMENT =====
 
 // Save message to database
-async function saveMessage(instanceId, remoteJid, role, content, direction = 'inbound', metadata = null) {
+async function saveMessage(instanceId, remoteJid, role, content, direction = 'inbound', metadata = null, options = {}) {
     const db = new sqlite3.Database(DB_PATH)
+    const {
+        waMessageId = null,
+        quotedMessageId = null,
+        quotedPreview = null,
+        sessionId = "",
+        remoteJidAlt = null,
+        participantAlt = null,
+        senderPn = null
+    } = options || {}
+    const normalizedRemoteJid = String(remoteJid || "").toLowerCase()
+    const normalizedRemoteJidAlt = remoteJidAlt ? String(remoteJidAlt).toLowerCase() : null
+    const normalizedSenderPn = normalizePhoneDigits(senderPn || extractDigitsFromJid(normalizedRemoteJid))
 
     return new Promise((resolve, reject) => {
         const sql = `
-            INSERT INTO messages (instance_id, remote_jid, role, content, direction, metadata)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO messages (
+                instance_id,
+                remote_jid,
+                session_id,
+                role,
+                content,
+                direction,
+                metadata,
+                wa_message_id,
+                quoted_message_id,
+                quoted_preview,
+                remote_jid_alt,
+                participant_alt,
+                sender_pn
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `
 
-        db.run(sql, [instanceId, remoteJid, role, content, direction, metadata], async function(err) {
+        db.run(sql, [
+            instanceId,
+            normalizedRemoteJid,
+            String(sessionId || ""),
+            role,
+            content,
+            direction,
+            metadata,
+            waMessageId,
+            quotedMessageId,
+            quotedPreview,
+            normalizedRemoteJidAlt,
+            participantAlt || null,
+            normalizedSenderPn || null
+        ], async function(err) {
             db.close()
             if (err) reject(err)
             else {
                 // Update TaxaR after saving message
                 try {
-                    await updateTaxaR(instanceId, remoteJid)
+                    await updateTaxaR(instanceId, normalizedRemoteJid)
                 } catch (taxaErr) {
                     console.error('Error updating TaxaR:', taxaErr.message)
                 }
@@ -1218,6 +1436,9 @@ async function saveContactMetadata(instanceId, remoteJid, contactName = null, st
     }
 
     const db = new sqlite3.Database(DB_PATH)
+    const normalizedTemperature = ['cold', 'warm', 'hot'].includes(String(temperature || '').toLowerCase())
+        ? String(temperature).toLowerCase()
+        : 'warm'
     
     return new Promise((resolve, reject) => {
         const sql = `
@@ -1236,7 +1457,7 @@ async function saveContactMetadata(instanceId, remoteJid, contactName = null, st
             contactName,
             statusName,
             profilePicture,
-            temperature
+            normalizedTemperature
         ]
 
         db.run(sql, params, function(err) {
@@ -1254,7 +1475,7 @@ async function getContactMetadata(instanceId, remoteJid) {
     const db = new sqlite3.Database(DB_PATH)
     return new Promise((resolve, reject) => {
         const sql = `
-            SELECT contact_name, status_name, profile_picture, temperature
+            SELECT contact_name, status_name, profile_picture, lid, pn, formatted_phone, temperature, taxar
             FROM contact_metadata
             WHERE instance_id = ?
               AND remote_jid = ?
@@ -1271,23 +1492,108 @@ async function getContactMetadata(instanceId, remoteJid) {
     })
 }
 
-// Get messages for a specific contact
-async function getMessages(instanceId, remoteJid, limit = 50, offset = 0) {
+function normalizePhoneDigits(value) {
+    const digits = String(value || "").replace(/\D/g, "")
+    if (!digits) return ""
+    if (digits.startsWith("55")) {
+        return digits.length >= 12 && digits.length <= 13 ? digits : ""
+    }
+    if (digits.length >= 10 && digits.length <= 11) {
+        return `55${digits}`
+    }
+    return ""
+}
+
+function extractDigitsFromJid(remoteJid) {
+    if (!remoteJid || typeof remoteJid !== "string") {
+        return ""
+    }
+    return normalizePhoneDigits(remoteJid.split("@")[0])
+}
+
+async function resolveConversationAliases(instanceId, remoteJid) {
+    const normalizedRemote = typeof remoteJid === "string" ? remoteJid.trim().toLowerCase() : ""
+    if (!instanceId || !normalizedRemote) {
+        return { remoteJids: [], senderPn: null }
+    }
+
+    const aliases = new Set([normalizedRemote])
+    let senderPn = extractDigitsFromJid(normalizedRemote)
+    const lidCandidate = normalizedRemote.endsWith("@lid")
+        ? normalizedRemote
+        : `${String(normalizedRemote.split("@")[0] || "").replace(/\D/g, "")}@lid`
+
     const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT remote_jid, lid, pn
+            FROM contact_metadata
+            WHERE instance_id = ?
+              AND (
+                    remote_jid = ?
+                 OR lid = ?
+                 OR pn = ?
+                 OR remote_jid = ?
+                 OR lid = ?
+              )
+            ORDER BY updated_at DESC
+            LIMIT 50
+        `
+        db.all(sql, [instanceId, normalizedRemote, normalizedRemote, senderPn || null, lidCandidate, lidCandidate], (err, rows) => {
+            db.close()
+            if (err) {
+                reject(err)
+                return
+            }
+
+            ;(rows || []).forEach(row => {
+                if (row?.remote_jid) aliases.add(String(row.remote_jid).toLowerCase())
+                if (row?.lid) aliases.add(String(row.lid).toLowerCase())
+                const rowPn = normalizePhoneDigits(row?.pn)
+                if (rowPn) {
+                    senderPn = senderPn || rowPn
+                    aliases.add(`${rowPn}@s.whatsapp.net`)
+                }
+            })
+
+            resolve({ remoteJids: Array.from(aliases), senderPn: senderPn || null })
+        })
+    })
+}
+
+// Get messages for a specific contact
+async function getMessages(instanceId, remoteJid, limit = 50, offset = 0, sessionId = "") {
     const normalizedRemote = typeof remoteJid === "string" ? remoteJid.toLowerCase() : ""
     if (normalizedRemote.startsWith("status@broadcast")) {
         return Promise.resolve([])
     }
-    
+    const normalizedSession = String(sessionId || "")
+    const hasSessionFilter = normalizedSession.length > 0
+    const { remoteJids, senderPn } = await resolveConversationAliases(instanceId, normalizedRemote)
+    if (!remoteJids.length) {
+        return []
+    }
+
+    const db = new sqlite3.Database(DB_PATH)
     return new Promise((resolve, reject) => {
+        const placeholders = remoteJids.map(() => "?").join(", ")
         const sqlBuilder = []
         sqlBuilder.push(`
             SELECT id, role, direction, content, timestamp, metadata
             FROM messages 
-            WHERE instance_id = ? AND remote_jid = ?
+            WHERE instance_id = ?
+              ${hasSessionFilter ? "AND session_id = ?" : ""}
+              AND (
+                    remote_jid IN (${placeholders})
+                 OR remote_jid_alt IN (${placeholders})
+                 ${senderPn ? "OR sender_pn = ?" : ""}
+              )
             ORDER BY timestamp ASC
         `)
-        const params = [instanceId, remoteJid]
+        const params = [instanceId, ...(hasSessionFilter ? [normalizedSession] : []), ...remoteJids, ...remoteJids]
+        if (senderPn) {
+            params.push(senderPn)
+        }
         const normalizedLimit = Number.isFinite(limit) ? limit : 50
         const normalizedOffset = Number.isFinite(offset) && offset > 0 ? offset : 0
 
@@ -1309,25 +1615,56 @@ async function getMessages(instanceId, remoteJid, limit = 50, offset = 0) {
 }
 
 // Get last N messages for context
-async function getLastMessages(instanceId, remoteJid, limit = 15) {
+async function getLastMessages(instanceId, remoteJid, limit = 15, sessionId = "") {
+    const normalizedRemote = typeof remoteJid === "string" ? remoteJid.toLowerCase() : ""
+    const { remoteJids, senderPn } = await resolveConversationAliases(instanceId, normalizedRemote)
+    if (!remoteJids.length) {
+        return []
+    }
+
     const db = new sqlite3.Database(DB_PATH)
+    const normalizedSession = String(sessionId || "")
+    const hasSessionFilter = normalizedSession.length > 0
     
     return new Promise((resolve, reject) => {
+        const placeholders = remoteJids.map(() => "?").join(", ")
+        
+        // Build WHERE clause - session_id is optional
+        let whereClause = `WHERE instance_id = ?`
+        if (hasSessionFilter) {
+            whereClause += ` AND session_id = ?`
+        }
+        whereClause += ` AND (
+                        remote_jid IN (${placeholders})
+                     OR remote_jid_alt IN (${placeholders})
+                     ${senderPn ? "OR sender_pn = ?" : ""}
+                  )
+                  AND (metadata IS NULL OR metadata NOT LIKE '%"severity":"error"%')`
+
         const sql = `
-            SELECT role, content
+            SELECT role, content, timestamp
             FROM (
-                SELECT role, content, id
+                SELECT role, content, timestamp, id
                 FROM messages
-                WHERE instance_id = ?
-                  AND remote_jid = ?
-                  AND (metadata IS NULL OR metadata NOT LIKE '%"severity":"error"%')
+                ${whereClause}
                 ORDER BY id DESC
                 LIMIT ?
             ) sub
             ORDER BY id ASC
         `
-        
-        db.all(sql, [instanceId, remoteJid, limit], (err, rows) => {
+
+        // Build params based on whether session filter is active
+        const params = [instanceId]
+        if (hasSessionFilter) {
+            params.push(normalizedSession)
+        }
+        params.push(...remoteJids, ...remoteJids)
+        if (senderPn) {
+            params.push(senderPn)
+        }
+        params.push(limit)
+
+        db.all(sql, params, (err, rows) => {
             db.close()
             if (err) reject(err)
             else resolve(rows)
@@ -1701,12 +2038,11 @@ async function deleteScheduledMessagesByTipo(instanceId, remoteJid, tipo) {
     })
 }
 
-async function markPendingScheduledMessagesFailed(instanceId, remoteJid, reason = "cancelled") {
+async function markPendingScheduledMessagesFailed(instanceId, remoteJid, reason = "cancelled", tag = null) {
     const db = new sqlite3.Database(DB_PATH)
     const now = new Date().toISOString()
     return new Promise((resolve, reject) => {
-        db.run(
-            `
+        let sql = `
             UPDATE scheduled_messages
             SET status = 'failed',
                 error = ?,
@@ -1715,14 +2051,17 @@ async function markPendingScheduledMessagesFailed(instanceId, remoteJid, reason 
             WHERE instance_id = ?
               AND remote_jid = ?
               AND status = 'pending'
-            `,
-            [reason, now, instanceId, remoteJid],
-            function(err) {
-                db.close()
-                if (err) reject(err)
-                else resolve({ canceled: this.changes })
-            }
-        )
+        `
+        const params = [reason, now, instanceId, remoteJid]
+        if (tag) {
+            sql += " AND tag = ?"
+            params.push(tag)
+        }
+        db.run(sql, params, function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ canceled: this.changes })
+        })
     })
 }
 
@@ -1820,19 +2159,20 @@ async function deleteScheduledMessage(scheduledId) {
     })
 }
 
-async function listContactContext(instanceId, remoteJid) {
+async function listContactContext(instanceId, remoteJid, sessionId = "") {
     if (!instanceId || !remoteJid) {
         return []
     }
+    const normalizedSession = String(sessionId || "")
     const db = new sqlite3.Database(DB_PATH)
     return new Promise((resolve, reject) => {
         const sql = `
             SELECT key, value
             FROM contact_context
-            WHERE instance_id = ? AND remote_jid = ?
+            WHERE instance_id = ? AND remote_jid = ? AND session_id = ?
             ORDER BY key ASC
         `
-        db.all(sql, [instanceId, remoteJid], (err, rows) => {
+        db.all(sql, [instanceId, remoteJid, normalizedSession], (err, rows) => {
             db.close()
             if (err) reject(err)
             else resolve(rows || [])
@@ -1840,20 +2180,21 @@ async function listContactContext(instanceId, remoteJid) {
     })
 }
 
-async function setContactContext(instanceId, remoteJid, key, value) {
+async function setContactContext(instanceId, remoteJid, key, value, sessionId = "") {
     if (!instanceId || !remoteJid || !key) {
         throw new Error("instanceId, remoteJid e key são obrigatórios para contexto")
     }
+    const normalizedSession = String(sessionId || "")
     const db = new sqlite3.Database(DB_PATH)
     return new Promise((resolve, reject) => {
         const sql = `
-            INSERT INTO contact_context (instance_id, remote_jid, key, value, updated_at)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(instance_id, remote_jid, key) DO UPDATE SET
+            INSERT INTO contact_context (instance_id, remote_jid, session_id, key, value, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(instance_id, remote_jid, session_id, key) DO UPDATE SET
                 value = excluded.value,
                 updated_at = CURRENT_TIMESTAMP
         `
-        db.run(sql, [instanceId, remoteJid, key, value], function(err) {
+        db.run(sql, [instanceId, remoteJid, normalizedSession, key, value], function(err) {
             db.close()
             if (err) reject(err)
             else resolve({ updated: this.changes })
@@ -1861,19 +2202,20 @@ async function setContactContext(instanceId, remoteJid, key, value) {
     })
 }
 
-async function getContactContext(instanceId, remoteJid, key) {
+async function getContactContext(instanceId, remoteJid, key, sessionId = "") {
     if (!instanceId || !remoteJid || !key) {
         return null
     }
+    const normalizedSession = String(sessionId || "")
     const db = new sqlite3.Database(DB_PATH)
     return new Promise((resolve, reject) => {
         const sql = `
             SELECT value
             FROM contact_context
-            WHERE instance_id = ? AND remote_jid = ? AND key = ?
+            WHERE instance_id = ? AND remote_jid = ? AND session_id = ? AND key = ?
             LIMIT 1
         `
-        db.get(sql, [instanceId, remoteJid, key], (err, row) => {
+        db.get(sql, [instanceId, remoteJid, normalizedSession, key], (err, row) => {
             db.close()
             if (err) reject(err)
             else resolve(row ? row.value : null)
@@ -1881,10 +2223,11 @@ async function getContactContext(instanceId, remoteJid, key) {
     })
 }
 
-async function deleteContactContext(instanceId, remoteJid, keys = null) {
+async function deleteContactContext(instanceId, remoteJid, keys = null, sessionId = "") {
     if (!instanceId || !remoteJid) {
         throw new Error("instanceId e remoteJid são obrigatórios para limpar contexto")
     }
+    const normalizedSession = String(sessionId || "")
     const db = new sqlite3.Database(DB_PATH)
     return new Promise((resolve, reject) => {
         let sql
@@ -1892,16 +2235,16 @@ async function deleteContactContext(instanceId, remoteJid, keys = null) {
         if (!keys || !keys.length) {
             sql = `
                 DELETE FROM contact_context
-                WHERE instance_id = ? AND remote_jid = ?
+                WHERE instance_id = ? AND remote_jid = ? AND session_id = ?
             `
-            params = [instanceId, remoteJid]
+            params = [instanceId, remoteJid, normalizedSession]
         } else {
             const placeholders = keys.map(() => '?').join(',')
             sql = `
                 DELETE FROM contact_context
-                WHERE instance_id = ? AND remote_jid = ? AND key IN (${placeholders})
+                WHERE instance_id = ? AND remote_jid = ? AND session_id = ? AND key IN (${placeholders})
             `
-            params = [instanceId, remoteJid, ...keys]
+            params = [instanceId, remoteJid, normalizedSession, ...keys]
         }
         db.run(sql, params, function(err) {
             db.close()
@@ -2040,14 +2383,29 @@ async function getInboundMessageCount(instanceId, remoteJid) {
     if (!instanceId || !remoteJid) {
         return 0
     }
+    const { remoteJids, senderPn } = await resolveConversationAliases(instanceId, remoteJid)
+    if (!remoteJids.length) {
+        return 0
+    }
     const db = new sqlite3.Database(DB_PATH)
     return new Promise((resolve, reject) => {
+        const placeholders = remoteJids.map(() => "?").join(", ")
         const sql = `
             SELECT COUNT(id) as count
             FROM messages
-            WHERE instance_id = ? AND remote_jid = ? AND direction = 'inbound'
+            WHERE instance_id = ?
+              AND direction = 'inbound'
+              AND (
+                    remote_jid IN (${placeholders})
+                 OR remote_jid_alt IN (${placeholders})
+                 ${senderPn ? "OR sender_pn = ?" : ""}
+              )
         `
-        db.get(sql, [instanceId, remoteJid], (err, row) => {
+        const params = [instanceId, ...remoteJids, ...remoteJids]
+        if (senderPn) {
+            params.push(senderPn)
+        }
+        db.get(sql, params, (err, row) => {
             db.close()
             if (err) {
                 reject(err)
@@ -2062,14 +2420,29 @@ async function getOutboundMessageCount(instanceId, remoteJid) {
     if (!instanceId || !remoteJid) {
         return 0
     }
+    const { remoteJids, senderPn } = await resolveConversationAliases(instanceId, remoteJid)
+    if (!remoteJids.length) {
+        return 0
+    }
     const db = new sqlite3.Database(DB_PATH)
     return new Promise((resolve, reject) => {
+        const placeholders = remoteJids.map(() => "?").join(", ")
         const sql = `
             SELECT COUNT(id) as count
             FROM messages
-            WHERE instance_id = ? AND remote_jid = ? AND direction = 'outbound'
+            WHERE instance_id = ?
+              AND direction = 'outbound'
+              AND (
+                    remote_jid IN (${placeholders})
+                 OR remote_jid_alt IN (${placeholders})
+                 ${senderPn ? "OR sender_pn = ?" : ""}
+              )
         `
-        db.get(sql, [instanceId, remoteJid], (err, row) => {
+        const params = [instanceId, ...remoteJids, ...remoteJids]
+        if (senderPn) {
+            params.push(senderPn)
+        }
+        db.get(sql, params, (err, row) => {
             db.close()
             if (err) {
                 reject(err)
@@ -2087,16 +2460,34 @@ async function saveInstanceRecord(instanceId, payload = {}) {
         throw new Error("instance_id é obrigatório")
     }
     const {
-        name = null,
-        port = null,
-        api_key = null,
-        status = null,
-        connection_status = null,
-        base_url = null,
-        phone = null
+        name = undefined,
+        port = undefined,
+        api_key = undefined,
+        status = undefined,
+        connection_status = undefined,
+        base_url = undefined,
+        phone = undefined
     } = payload
 
     const db = new sqlite3.Database(DB_PATH)
+    
+    // Buscar valores existentes para não sobrescrever com null
+    const existingRecord = await new Promise((resolve, reject) => {
+        db.get('SELECT name, port, api_key, status, connection_status, base_url, phone FROM instances WHERE instance_id = ?', [instanceId], (err, row) => {
+            if (err) reject(err)
+            else resolve(row || null)
+        })
+    })
+    
+    // Usar valores existentes se o payload não fornecer
+    const finalName = name !== undefined ? name : (existingRecord?.name || null)
+    const finalPort = port !== undefined ? port : (existingRecord?.port || null)
+    const finalApiKey = api_key !== undefined ? api_key : (existingRecord?.api_key || null)
+    const finalStatus = status !== undefined ? status : (existingRecord?.status || null)
+    const finalConnectionStatus = connection_status !== undefined ? connection_status : (existingRecord?.connection_status || null)
+    const finalBaseUrl = base_url !== undefined ? base_url : (existingRecord?.base_url || null)
+    const finalPhone = phone !== undefined ? phone : (existingRecord?.phone || null)
+
     return new Promise((resolve, reject) => {
         const sql = `
             INSERT INTO instances (instance_id, name, port, api_key, status, connection_status, base_url, phone)
@@ -2111,7 +2502,7 @@ async function saveInstanceRecord(instanceId, payload = {}) {
                 phone = excluded.phone,
                 updated_at = CURRENT_TIMESTAMP
         `
-        db.run(sql, [instanceId, name, port, api_key, status, connection_status, base_url, phone], function (err) {
+        db.run(sql, [instanceId, finalName, finalPort, finalApiKey, finalStatus, finalConnectionStatus, finalBaseUrl, finalPhone], function (err) {
             db.close()
             if (err) reject(err)
             else resolve({ changes: this.changes, lastID: this.lastID })
@@ -2168,52 +2559,137 @@ async function getChats(instanceId, search = '', limit = 50, offset = 0) {
                 cm.contact_name,
                 cm.status_name,
                 cm.profile_picture,
+                cm.lid,
+                cm.pn,
+                cm.formatted_phone,
                 (
-                    SELECT content 
-                    FROM messages 
-                    WHERE instance_id = chats.instance_id 
-                    AND remote_jid = chats.remote_jid 
-                    ORDER BY timestamp DESC 
-                    LIMIT 1
+                    SELECT COALESCE(
+                        (
+                            SELECT content 
+                            FROM messages 
+                            WHERE instance_id = chats.instance_id 
+                            AND remote_jid = chats.remote_jid 
+                            ORDER BY timestamp DESC 
+                            LIMIT 1
+                        ),
+                        CASE 
+                            WHEN cm.updated_at IS NOT NULL THEN 'Histórico não persistido nesta instância'
+                            ELSE NULL
+                        END
+                    )
                 ) as last_message,
                 (
-                    SELECT timestamp 
-                    FROM messages 
-                    WHERE instance_id = chats.instance_id 
-                    AND remote_jid = chats.remote_jid 
-                    ORDER BY timestamp DESC 
-                    LIMIT 1
+                    SELECT COALESCE(
+                        (
+                            SELECT timestamp 
+                            FROM messages 
+                            WHERE instance_id = chats.instance_id 
+                            AND remote_jid = chats.remote_jid 
+                            ORDER BY timestamp DESC 
+                            LIMIT 1
+                        ),
+                        cm.updated_at
+                    )
                 ) as last_timestamp,
                 (
-                    SELECT role 
-                    FROM messages 
-                    WHERE instance_id = chats.instance_id 
-                    AND remote_jid = chats.remote_jid 
-                    ORDER BY timestamp DESC 
-                    LIMIT 1
+                    SELECT COALESCE(
+                        (
+                            SELECT role 
+                            FROM messages 
+                            WHERE instance_id = chats.instance_id 
+                            AND remote_jid = chats.remote_jid 
+                            ORDER BY timestamp DESC 
+                            LIMIT 1
+                        ),
+                        'system'
+                    )
                 ) as last_role,
-                COUNT(*) as message_count
+                (
+                    SELECT COUNT(*)
+                    FROM messages
+                    WHERE instance_id = chats.instance_id
+                      AND remote_jid = chats.remote_jid
+                ) as message_count
             FROM (
                 SELECT DISTINCT remote_jid, instance_id
                 FROM messages 
                 WHERE instance_id = ?
                   AND remote_jid NOT LIKE 'status@broadcast%'
                 ${search ? 'AND remote_jid LIKE ?' : ''}
+                UNION
+                SELECT DISTINCT remote_jid, instance_id
+                FROM contact_metadata
+                WHERE instance_id = ?
+                  AND remote_jid NOT LIKE 'status@broadcast%'
+                ${search ? 'AND remote_jid LIKE ?' : ''}
             ) as chats
             LEFT JOIN contact_metadata cm ON cm.instance_id = chats.instance_id AND cm.remote_jid = chats.remote_jid
-            GROUP BY chats.remote_jid, cm.contact_name, cm.status_name, cm.profile_picture
             ORDER BY last_timestamp DESC
             LIMIT ? OFFSET ?
         `
         
         const params = search 
-            ? [instanceId, `%${search}%`, limit, offset]
-            : [instanceId, limit, offset]
+            ? [instanceId, `%${search}%`, instanceId, `%${search}%`, limit, offset]
+            : [instanceId, instanceId, limit, offset]
         
         db.all(sql, params, (err, rows) => {
             db.close()
             if (err) reject(err)
-            else resolve(rows)
+            else {
+                const enrichedRows = (rows || []).map(row => {
+                    const remote = String(row?.remote_jid || "")
+                    const isLid = remote.endsWith("@lid")
+                    const derivedPn = normalizePhoneDigits(row?.pn || (remote.endsWith("@s.whatsapp.net") ? extractDigitsFromJid(remote) : ""))
+                    return {
+                        ...row,
+                        is_lid: isLid,
+                        _pn_digits: derivedPn || null
+                    }
+                })
+
+                const latestByPn = new Map()
+                enrichedRows.forEach(row => {
+                    const key = row._pn_digits
+                    if (!key) return
+                    const current = latestByPn.get(key)
+                    const rowTs = row.last_timestamp ? new Date(row.last_timestamp).getTime() : 0
+                    const curTs = current?.last_timestamp ? new Date(current.last_timestamp).getTime() : 0
+                    if (!current || rowTs >= curTs) {
+                        latestByPn.set(key, row)
+                    }
+                })
+
+                const processedRows = enrichedRows.map(row => {
+                    const latestFromGroup = row._pn_digits ? latestByPn.get(row._pn_digits) : null
+                    const mergedLastMessage = row.last_message || latestFromGroup?.last_message || 'Histórico não persistido nesta instância'
+                    const mergedTimestamp = row.last_timestamp || latestFromGroup?.last_timestamp || null
+                    const mergedRole = row.last_role || latestFromGroup?.last_role || 'system'
+                    const mergedCount = Math.max(Number(row.message_count || 0), Number(latestFromGroup?.message_count || 0))
+
+                    if (row.is_lid) {
+                        const displayPhone = row.formatted_phone || (row._pn_digits ? formatBrazilianPhone(row._pn_digits) : null)
+                        return {
+                            ...row,
+                            display_jid: displayPhone || 'Contato sem telefone resolvido',
+                            last_message: mergedLastMessage,
+                            last_timestamp: mergedTimestamp,
+                            last_role: mergedRole,
+                            message_count: mergedCount
+                        }
+                    }
+
+                    return {
+                        ...row,
+                        display_jid: row.remote_jid,
+                        last_message: mergedLastMessage,
+                        last_timestamp: mergedTimestamp,
+                        last_role: mergedRole,
+                        message_count: mergedCount
+                    }
+                })
+                const visibleRows = processedRows.filter(row => Number(row.message_count || 0) > 0)
+                resolve(visibleRows)
+            }
         })
     })
 }
@@ -2227,7 +2703,6 @@ async function getDatabaseHealth() {
     return new Promise((resolve, reject) => {
         const stats = {}
         
-        // Get file size
         try {
             const fileSize = fs.statSync(DB_PATH).size
             stats.fileSize = fileSize
@@ -2237,9 +2712,8 @@ async function getDatabaseHealth() {
             stats.fileSizeMB = '0.00'
         }
         
-        // Get message count
         const countSQL = `SELECT COUNT(*) as total_messages FROM messages`
-        
+
         db.get(countSQL, (err, row) => {
             db.close()
             if (err) {
@@ -2248,6 +2722,284 @@ async function getDatabaseHealth() {
                 stats.totalMessages = row.total_messages
                 stats.status = 'connected'
                 resolve(stats)
+            }
+        })
+    })
+}
+
+async function recordDiagEvent(payload) {
+    const db = new sqlite3.Database(DB_PATH)
+    const {
+        instance_id,
+        event_type,
+        state = null,
+        connection = null,
+        event_payload = null,
+        last_disconnect_reason = null,
+        last_disconnect_status_code = null,
+        attempt = 0,
+        message_count = 0,
+        metadata = null
+    } = payload || {}
+
+    if (!instance_id || !event_type) {
+        throw new Error('instance_id and event_type are required for diag events')
+    }
+
+    return new Promise((resolve, reject) => {
+        const sql = `
+            INSERT INTO diag_events (
+                instance_id,
+                event_type,
+                state,
+                connection,
+                event_payload,
+                last_disconnect_reason,
+                last_disconnect_status_code,
+                attempt,
+                message_count,
+                metadata
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `
+        db.run(sql, [
+            instance_id,
+            event_type,
+            state,
+            connection,
+            event_payload ? JSON.stringify(event_payload) : null,
+            last_disconnect_reason,
+            last_disconnect_status_code,
+            attempt,
+            message_count,
+            metadata ? JSON.stringify(metadata) : null
+        ], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ eventId: this.lastID })
+        })
+    })
+}
+
+async function getDiagEvents(instanceId, limit = 20) {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT *
+            FROM diag_events
+            WHERE instance_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+        `
+        db.all(sql, [instanceId, limit], (err, rows) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(rows || [])
+        })
+    })
+}
+
+async function recordHeartbeat(payload) {
+    const db = new sqlite3.Database(DB_PATH)
+    const {
+        instance_id,
+        uptime_sec = null,
+        mem_rss_mb = null,
+        heap_used_mb = null,
+        cpu_user_sec = null,
+        cpu_system_sec = null,
+        cpu_load = null,
+        event_loop_lag_ms = null,
+        listener_count = null,
+        socket_count = null,
+        http_ping_ms = null
+    } = payload || {}
+
+    if (!instance_id) {
+        throw new Error('instance_id is required for heartbeat')
+    }
+
+    return new Promise((resolve, reject) => {
+        const sql = `
+            INSERT INTO diag_heartbeats (
+                instance_id,
+                uptime_sec,
+                mem_rss_mb,
+                heap_used_mb,
+                cpu_user_sec,
+                cpu_system_sec,
+                cpu_load,
+                event_loop_lag_ms,
+                listener_count,
+                socket_count,
+                http_ping_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `
+        db.run(sql, [
+            instance_id,
+            uptime_sec,
+            mem_rss_mb,
+            heap_used_mb,
+            cpu_user_sec,
+            cpu_system_sec,
+            cpu_load,
+            event_loop_lag_ms,
+            listener_count,
+            socket_count,
+            http_ping_ms
+        ], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ heartbeatId: this.lastID })
+        })
+    })
+}
+
+async function getHeartbeats(instanceId, limit = 20) {
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT *
+            FROM diag_heartbeats
+            WHERE instance_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+        `
+        db.all(sql, [instanceId, limit], (err, rows) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(rows || [])
+        })
+    })
+}
+
+async function upsertInstanceDiagStats(instanceId, payload) {
+    if (!instanceId) {
+        throw new Error('instance_id is required for diag stats')
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    const {
+        last_disconnect_reason = null,
+        last_disconnect_status_code = null,
+        last_disconnect_at = null,
+        reconnect_count = 0
+    } = payload || {}
+
+    return new Promise((resolve, reject) => {
+        const sql = `
+            INSERT INTO diag_instance_stats (
+                instance_id,
+                last_disconnect_reason,
+                last_disconnect_status_code,
+                last_disconnect_at,
+                reconnect_count,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(instance_id) DO UPDATE SET
+                last_disconnect_reason = excluded.last_disconnect_reason,
+                last_disconnect_status_code = excluded.last_disconnect_status_code,
+                last_disconnect_at = excluded.last_disconnect_at,
+                reconnect_count = excluded.reconnect_count,
+                updated_at = CURRENT_TIMESTAMP
+        `
+        db.run(sql, [
+            instanceId,
+            last_disconnect_reason,
+            last_disconnect_status_code,
+            last_disconnect_at,
+            reconnect_count
+        ], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ updated: this.changes })
+        })
+    })
+}
+
+async function getInstanceDiagStats(instanceId) {
+    if (!instanceId) {
+        return null
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT *
+            FROM diag_instance_stats
+            WHERE instance_id = ?
+            LIMIT 1
+        `
+        db.get(sql, [instanceId], (err, row) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(row || null)
+        })
+    })
+}
+
+async function countDiagEvents(instanceId, filters = {}) {
+    if (!instanceId) {
+        return 0
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    const { connection, eventType, sinceMs, state } = filters || {}
+    const params = [instanceId]
+    let sql = `SELECT COUNT(*) as count FROM diag_events WHERE instance_id = ?`
+    if (connection) {
+        sql += ` AND connection = ?`
+        params.push(connection)
+    }
+    if (eventType) {
+        sql += ` AND event_type = ?`
+        params.push(eventType)
+    }
+    if (state) {
+        sql += ` AND state = ?`
+        params.push(state)
+    }
+    if (sinceMs) {
+        const sinceDate = new Date(Number(sinceMs))
+        if (!Number.isNaN(sinceDate.getTime())) {
+            sql += ` AND created_at >= ?`
+            params.push(sinceDate.toISOString())
+        }
+    }
+    return new Promise((resolve, reject) => {
+        db.get(sql, params, (err, row) => {
+            db.close()
+            if (err) {
+                reject(err)
+            } else {
+                resolve(row ? row.count : 0)
+            }
+        })
+    })
+}
+
+async function getDiagEventsSince(instanceId, sinceMs = null, limit = 0) {
+    if (!instanceId) {
+        return []
+    }
+    const db = new sqlite3.Database(DB_PATH)
+    const params = [instanceId]
+    let sql = `SELECT * FROM diag_events WHERE instance_id = ?`
+    if (sinceMs) {
+        const sinceDate = new Date(Number(sinceMs))
+        if (!Number.isNaN(sinceDate.getTime())) {
+            sql += ` AND created_at >= ?`
+            params.push(sinceDate.toISOString())
+        }
+    }
+    sql += ` ORDER BY created_at ASC`
+    if (limit > 0) {
+        sql += ` LIMIT ?`
+        params.push(limit)
+    }
+    return new Promise((resolve, reject) => {
+        db.all(sql, params, (err, rows) => {
+            db.close()
+            if (err) {
+                reject(err)
+            } else {
+                resolve(rows || [])
             }
         })
     })
@@ -2341,11 +3093,12 @@ async function saveThreadMetadata(instanceId, remoteJid, threadId, lastMessageId
 }
 
 async function clearConversation(instanceId, remoteJid) {
+    const { remoteJids } = await resolveConversationAliases(instanceId, remoteJid)
+    const targets = remoteJids.length ? remoteJids : [remoteJid || ""]
     const db = new sqlite3.Database(DB_PATH)
 
     return new Promise((resolve, reject) => {
         db.serialize(() => {
-            const cleanRemote = remoteJid || ''
             const statements = [
                 `DELETE FROM messages WHERE instance_id = ? AND remote_jid = ?`,
                 `DELETE FROM chat_history WHERE instance_id = ? AND remote_jid = ?`,
@@ -2363,14 +3116,16 @@ async function clearConversation(instanceId, remoteJid) {
             }
 
             statements.forEach(sql => {
-                db.run(sql, [instanceId, cleanRemote], err => {
-                    if (err) {
-                        hasError = true
-                    }
-                    completed++
-                    if (completed === statements.length) {
-                        finish()
-                    }
+                targets.forEach(targetRemote => {
+                    db.run(sql, [instanceId, targetRemote], err => {
+                        if (err) {
+                            hasError = true
+                        }
+                        completed++
+                        if (completed === statements.length * targets.length) {
+                            finish()
+                        }
+                    })
                 })
             })
         })
@@ -2464,6 +3219,274 @@ async function getMetaTemplate(instanceId, templateName, language = 'pt_BR') {
                 resolve({
                     ...row,
                     components: row.components_json ? JSON.parse(row.components_json) : null
+                })
+            } else {
+                resolve(null)
+            }
+        })
+    })
+}
+
+// ===== LID/PN MAPPING FUNCTIONS =====
+
+// Ensure LID/PN columns exist in contact_metadata
+function ensureLIDPNColumns(db) {
+    return new Promise((resolve, reject) => {
+        db.all(`PRAGMA table_info(contact_metadata)`, (err, rows) => {
+            if (err) {
+                return reject(err)
+            }
+            const hasLid = rows.some(row => row.name === 'lid')
+            const hasPn = rows.some(row => row.name === 'pn')
+            const hasFormattedPhone = rows.some(row => row.name === 'formatted_phone')
+            
+            const tasks = []
+            if (!hasLid) {
+                tasks.push(new Promise((res, rej) => {
+                    db.run(`ALTER TABLE contact_metadata ADD COLUMN lid TEXT`, alterErr => {
+                        if (alterErr) rej(alterErr)
+                        else res()
+                    })
+                }))
+            }
+            if (!hasPn) {
+                tasks.push(new Promise((res, rej) => {
+                    db.run(`ALTER TABLE contact_metadata ADD COLUMN pn TEXT`, alterErr => {
+                        if (alterErr) rej(alterErr)
+                        else res()
+                    })
+                }))
+            }
+            if (!hasFormattedPhone) {
+                tasks.push(new Promise((res, rej) => {
+                    db.run(`ALTER TABLE contact_metadata ADD COLUMN formatted_phone TEXT`, alterErr => {
+                        if (alterErr) rej(alterErr)
+                        else res()
+                    })
+                }))
+            }
+            if (!tasks.length) {
+                return resolve()
+            }
+            Promise.all(tasks).then(() => resolve()).catch(reject)
+        })
+    })
+}
+
+// Ensure LID message columns exist in messages table
+function ensureLIDMessageColumns(db) {
+    return new Promise((resolve, reject) => {
+        db.all(`PRAGMA table_info(messages)`, (err, rows) => {
+            if (err) {
+                return reject(err)
+            }
+            const hasRemoteJidAlt = rows.some(row => row.name === 'remote_jid_alt')
+            const hasParticipantAlt = rows.some(row => row.name === 'participant_alt')
+            const hasSenderPn = rows.some(row => row.name === 'sender_pn')
+            
+            const tasks = []
+            if (!hasRemoteJidAlt) {
+                tasks.push(new Promise((res, rej) => {
+                    db.run(`ALTER TABLE messages ADD COLUMN remote_jid_alt TEXT`, alterErr => {
+                        if (alterErr) rej(alterErr)
+                        else res()
+                    })
+                }))
+            }
+            if (!hasParticipantAlt) {
+                tasks.push(new Promise((res, rej) => {
+                    db.run(`ALTER TABLE messages ADD COLUMN participant_alt TEXT`, alterErr => {
+                        if (alterErr) rej(alterErr)
+                        else res()
+                    })
+                }))
+            }
+            if (!hasSenderPn) {
+                tasks.push(new Promise((res, rej) => {
+                    db.run(`ALTER TABLE messages ADD COLUMN sender_pn TEXT`, alterErr => {
+                        if (alterErr) rej(alterErr)
+                        else res()
+                    })
+                }))
+            }
+            if (!tasks.length) {
+                return resolve()
+            }
+            Promise.all(tasks).then(() => resolve()).catch(reject)
+        })
+    })
+}
+
+// Save LID to PN mapping.
+// Backward compatible signatures:
+// - saveLIDPNMapping(instanceId, lid, pn)
+// - saveLIDPNMapping(lid, pn)
+async function saveLIDPNMapping(arg1, arg2, arg3) {
+    const hasInstance = typeof arg3 !== "undefined"
+    const instanceId = hasInstance ? String(arg1 || "") : ""
+    const lid = hasInstance ? arg2 : arg1
+    const pnRaw = hasInstance ? arg3 : arg2
+    const pn = normalizePhoneDigits(pnRaw)
+    if (!lid || !pn) return Promise.resolve(null)
+
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        if (!instanceId) {
+            const updateSql = `
+                UPDATE contact_metadata
+                SET pn = COALESCE(?, pn),
+                    formatted_phone = COALESCE(?, formatted_phone),
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE lid = ?
+            `
+            db.run(updateSql, [pn, formatBrazilianPhone(pn), lid], function(err) {
+                db.close()
+                if (err) reject(err)
+                else resolve({ ok: this.changes > 0, lid, pn, updated: this.changes || 0 })
+            })
+            return
+        }
+
+        const sql = `
+            INSERT INTO contact_metadata (instance_id, remote_jid, lid, pn, formatted_phone, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(instance_id, remote_jid) DO UPDATE SET
+                lid = COALESCE(excluded.lid, contact_metadata.lid),
+                pn = COALESCE(excluded.pn, contact_metadata.pn),
+                formatted_phone = COALESCE(excluded.formatted_phone, contact_metadata.formatted_phone),
+                updated_at = CURRENT_TIMESTAMP
+        `
+        db.run(sql, [instanceId, lid, lid, pn, formatBrazilianPhone(pn)], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ ok: true, lid, pn, updated: this.changes || 0 })
+        })
+    })
+}
+
+// Get PN from LID.
+// Backward compatible signatures:
+// - getPNFromLID(instanceId, lid)
+// - getPNFromLID(lid)
+async function getPNFromLID(arg1, arg2) {
+    const hasInstance = typeof arg2 !== "undefined"
+    const instanceId = hasInstance ? String(arg1 || "") : ""
+    const lid = hasInstance ? arg2 : arg1
+    if (!lid) return Promise.resolve(null)
+
+    const db = new sqlite3.Database(DB_PATH)
+    return new Promise((resolve, reject) => {
+        const sql = hasInstance && instanceId
+            ? `SELECT pn FROM contact_metadata WHERE instance_id = ? AND lid = ? AND pn IS NOT NULL ORDER BY updated_at DESC LIMIT 1`
+            : `SELECT pn FROM contact_metadata WHERE lid = ? AND pn IS NOT NULL ORDER BY updated_at DESC LIMIT 1`
+        const params = hasInstance && instanceId ? [instanceId, lid] : [lid]
+        db.get(sql, params, (err, row) => {
+            db.close()
+            if (err) reject(err)
+            else resolve(normalizePhoneDigits(row ? row.pn : null) || null)
+        })
+    })
+}
+
+// Format Brazilian phone number
+function formatBrazilianPhone(phone) {
+    if (!phone) return ''
+    
+    const digits = String(phone).replace(/\D/g, '')
+    if (!digits || digits.length < 10) return phone
+    
+    // Brazilian format: +55 XX XXXXX-XXXX
+    if (digits.startsWith('55') && digits.length >= 12) {
+        const country = '55'
+        const area = digits.slice(2, 4)
+        const prefix = digits.slice(4, -4)
+        const suffix = digits.slice(-4)
+        return `+${country} ${area} ${prefix}-${suffix}`
+    }
+    
+    // Generic format for other numbers
+    if (digits.length >= 10) {
+        const area = digits.slice(0, 2)
+        const prefix = digits.slice(2, -4)
+        const suffix = digits.slice(-4)
+        return `${area} ${prefix}-${suffix}`
+    }
+    
+    return phone
+}
+
+// Resolve LID to PN and format phone number
+async function resolveLIDtoPN(arg1, arg2) {
+    const hasInstance = typeof arg2 !== "undefined"
+    const instanceId = hasInstance ? String(arg1 || "") : ""
+    const lid = hasInstance ? arg2 : arg1
+    if (!lid || !String(lid).includes('@lid')) {
+        return { pn: null, formattedPhone: null, isLID: false }
+    }
+    
+    // Check database first
+    const cachedPN = hasInstance && instanceId
+        ? await getPNFromLID(instanceId, lid)
+        : await getPNFromLID(lid)
+    if (cachedPN) {
+        return {
+            pn: cachedPN,
+            formattedPhone: formatBrazilianPhone(cachedPN),
+            isLID: true
+        }
+    }
+    
+    return { pn: null, formattedPhone: null, isLID: true }
+}
+
+// Update contact metadata with LID/PN info
+async function updateContactIdentity(instanceId, remoteJid, lid, pn) {
+    if (!instanceId || !remoteJid) return Promise.resolve(null)
+    
+    const db = new sqlite3.Database(DB_PATH)
+    const normalizedPn = normalizePhoneDigits(pn)
+    const formattedPhone = normalizedPn ? formatBrazilianPhone(normalizedPn) : null
+    
+    return new Promise((resolve, reject) => {
+        const sql = `
+            INSERT INTO contact_metadata (instance_id, remote_jid, lid, pn, formatted_phone, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(instance_id, remote_jid) DO UPDATE SET
+                lid = COALESCE(excluded.lid, contact_metadata.lid),
+                pn = COALESCE(excluded.pn, contact_metadata.pn),
+                formatted_phone = COALESCE(excluded.formatted_phone, contact_metadata.formatted_phone),
+                updated_at = CURRENT_TIMESTAMP
+        `
+        
+        db.run(sql, [instanceId, remoteJid, lid, normalizedPn || null, formattedPhone], function(err) {
+            db.close()
+            if (err) reject(err)
+            else resolve({ updated: this.changes, pn: normalizedPn || null, formattedPhone })
+        })
+    })
+}
+
+// Get contact identity with resolved PN
+async function getContactIdentity(instanceId, remoteJid) {
+    if (!instanceId || !remoteJid) return Promise.resolve(null)
+    
+    const db = new sqlite3.Database(DB_PATH)
+    
+    return new Promise((resolve, reject) => {
+        const sql = `
+            SELECT contact_name, status_name, profile_picture, lid, pn, formatted_phone, temperature, taxar
+            FROM contact_metadata
+            WHERE instance_id = ? AND remote_jid = ?
+            LIMIT 1
+        `
+        
+        db.get(sql, [instanceId, remoteJid], (err, row) => {
+            db.close()
+            if (err) reject(err)
+            else if (row) {
+                resolve({
+                    ...row,
+                    formatted_phone: row.formatted_phone || formatBrazilianPhone(row.pn)
                 })
             } else {
                 resolve(null)
@@ -2776,6 +3799,138 @@ class DatabaseAuthStore {
     }
 }
 
+// Cleanup function for orphaned instances
+async function cleanupOrphanedInstances(maxAgeHours = 24) {
+    const db = new sqlite3.Database(DB_PATH)
+    const cutoffTime = new Date(Date.now() - maxAgeHours * 60 * 60 * 1000).toISOString()
+
+    return new Promise((resolve, reject) => {
+        const sql = `
+            DELETE FROM instances
+            WHERE updated_at < ?
+            AND status NOT IN ('active', 'starting', 'deleted')
+        `
+        db.run(sql, [cutoffTime], function(err) {
+            db.close()
+            if (err) {
+                console.error('Error cleaning up orphaned instances:', err.message)
+                reject(err)
+            } else {
+                console.log(`Cleaned up ${this.changes} orphaned instance(s)`)
+                resolve({ cleaned: this.changes })
+            }
+        })
+    })
+}
+
+// Cleanup completo de uma instância (deleta todos os dados relacionados)
+async function deleteInstance(instanceId) {
+    if (!instanceId) {
+        throw new Error("instance_id é obrigatório")
+    }
+    
+    const DB_PATH = path.join(__dirname, 'chat_data.db')
+    const db = new sqlite3.Database(DB_PATH)
+    
+    return new Promise((resolve, reject) => {
+        db.serialize(() => {
+            const statements = [
+                // Meta APIs
+                `DELETE FROM meta_templates WHERE instance_id = ?`,
+                `DELETE FROM meta_webhook_events WHERE instance_id = ?`,
+                `DELETE FROM meta_instance_config WHERE instance_id = ?`,
+                
+                // Calendar
+                `DELETE FROM calendar_accounts WHERE instance_id = ?`,
+                `DELETE FROM calendar_calendars WHERE instance_id = ?`,
+                
+                // Auth
+                `DELETE FROM auth_state WHERE instance_id = ?`,
+                
+                // Diagnostics
+                `DELETE FROM diag_events WHERE instance_id = ?`,
+                `DELETE FROM diag_heartbeats WHERE instance_id = ?`,
+                `DELETE FROM diag_instance_stats WHERE instance_id = ?`,
+                
+                // Messages & Chat
+                `DELETE FROM messages WHERE instance_id = ?`,
+                `DELETE FROM chat_history WHERE instance_id = ?`,
+                `DELETE FROM threads WHERE instance_id = ?`,
+                
+                // Scheduled
+                `DELETE FROM scheduled_messages WHERE instance_id = ?`,
+                `DELETE FROM group_scheduled_messages WHERE instance_id = ?`,
+                
+                // Groups
+                `DELETE FROM group_monitoring WHERE instance_id = ?`,
+                `DELETE FROM group_messages WHERE instance_id = ?`,
+                `DELETE FROM group_auto_replies WHERE instance_id = ?`,
+                
+                // Contacts
+                `DELETE FROM contacts WHERE instance_id = ?`,
+                `DELETE FROM contact_metadata WHERE instance_id = ?`,
+                `DELETE FROM contact_context WHERE instance_id = ?`,
+                
+                // Settings & Variables
+                `DELETE FROM settings WHERE instance_id = ?`,
+                `DELETE FROM persistent_variables WHERE instance_id = ?`,
+                
+                // Main instance record (DEVE SER O ÚLTIMO)
+                `DELETE FROM instances WHERE instance_id = ?`
+            ]
+            
+            let completed = 0
+            const errors = []
+            
+            statements.forEach((sql, index) => {
+                db.run(sql, [instanceId], function(err) {
+                    if (err) {
+                        errors.push({ statement: index, error: err.message })
+                    }
+                    completed++
+                    if (completed === statements.length) {
+                        db.close()
+                        if (errors.length > 0) {
+                            console.error('[deleteInstance] Errors during cleanup:', errors)
+                        }
+                        resolve({ 
+                            ok: true, 
+                            instanceId, 
+                            errors: errors.length > 0 ? errors : null 
+                        })
+                    }
+                })
+            })
+        })
+    })
+}
+
+// Track instance deletion by marking as deleted
+async function markInstanceAsDeleted(instanceId) {
+    if (!instanceId) {
+        throw new Error("&instance_id& é obrigatório")
+    }
+    
+    const db = new sqlite3.Database(DB_PATH)
+    
+    return new Promise((resolve, reject) => {
+        const sql = `
+            UPDATE instances 
+            SET status = 'deleted', updated_at = CURRENT_TIMESTAMP 
+            WHERE instance_id = ?
+        `
+        
+        db.run(sql, [instanceId], function(err) {
+            db.close()
+            if (err) {
+                reject(err)
+            } else {
+                resolve({ marked: this.changes })
+            }
+        })
+    })
+}
+
 // Export functions
 module.exports = {
     initDatabase,
@@ -2801,6 +3956,7 @@ module.exports = {
     saveContactMetadata,
     getContactMetadata,
     getMessages,
+    listMessages: getMessages,
     getLastMessages,
     enqueueScheduledMessage,
     fetchDueScheduledMessages,
@@ -2858,6 +4014,14 @@ module.exports = {
     getChats,
     // Health
     getDatabaseHealth,
+    recordDiagEvent,
+    getDiagEvents,
+    recordHeartbeat,
+    getHeartbeats,
+    countDiagEvents,
+    getDiagEventsSince,
+    upsertInstanceDiagStats,
+    getInstanceDiagStats,
     // Context
     getConversationContext,
     // Threads
@@ -2867,6 +4031,17 @@ module.exports = {
     // TaxaR
     updateTaxaR,
     getGlobalTaxaRAverage,
+    // LID/PN Mapping
+    saveLIDPNMapping,
+    getPNFromLID,
+    resolveLIDtoPN,
+    updateContactIdentity,
+    getContactIdentity,
+    formatBrazilianPhone,
     // Auth State
-    DatabaseAuthStore
+    DatabaseAuthStore,
+    // Cleanup
+    cleanupOrphanedInstances,
+    deleteInstance,
+    markInstanceAsDeleted
 }

@@ -1,25 +1,30 @@
-# Project Brief: Maestro - WhatsApp Orchestrator
+# Project Brief - Maestro Janeri WhatsApp Platform
 
-## Overview
-Maestro is a multi-instance WhatsApp management system that allows centralized orchestration of multiple WhatsApp API instances. Version 1.5 introduces multi-user management with granular access control.
+## Project Overview
+Multi-tenant WhatsApp messaging platform with instances, QR code connection, and campaign management.
 
-## Core Requirements
-- Multi-instance management via central SQLite database
-- User roles: Admin, Manager, Operator
-- QR code authentication
-- AI-powered automated responses (OpenAI, Gemini)
-- WhatsApp-style chat dashboard
-- Google Calendar integration for scheduling
+## Technology Stack
+- **Frontend**: PHP (native), JavaScript
+- **Backend**: Node.js (whatsapp-server-intelligent.js)
+- **Database**: SQLite (instance_data.php)
+- **Protocol**: WhatsApp Web (Baileys library)
 
-## Goals
-- Provide a robust, scalable solution for managing multiple WhatsApp business accounts
-- Enable efficient customer communication through AI automation
-- Ensure secure, role-based access to instances
-- Integrate with external services like Google Calendar
+## Architecture
+- **Master Server**: Node.js process manager (master-server.js) managing multiple instance processes
+- **Instance**: Each WhatsApp instance runs on a unique port (e.g., 3000, 3011, etc.)
+- **QR Proxy**: PHP script (qr-proxy.php) bridging frontend requests to instance API endpoints
 
-## Scope
-- Backend: PHP 8.0+, Node.js 18+
-- Frontend: HTML5, Tailwind CSS, JS
-- Database: SQLite
-- WhatsApp: Baileys library
-- AI: OpenAI GPT, Gemini
+## Critical Endpoints (VERIFIED)
+| Service | Port | Endpoint | Purpose |
+|---------|------|----------|---------|
+| WhatsApp Instance | :3011 | `/qr` | QR code retrieval |
+| WhatsApp Instance | :3011 | `/status` | Connection status |
+| QR Proxy | HTTP | `/api/envio/wpp/qr-proxy.php` | Frontend QR bridge |
+
+## Known Issues Fixed
+- **2026-02-15**: QR code not displaying - Fixed endpoint path in qr-proxy.php (was calling `/api/qr`, should be `/qr`)
+
+## Security Notes
+- Token-based authentication for QR proxy
+- Session timeout: 24h window for WhatsApp connection
+- No global variables in JS - use dependency injection

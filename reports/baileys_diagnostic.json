@@ -1,0 +1,46 @@
+{
+  "generatedAt": "2026-01-28T10:40:00.000Z",
+  "summary": "Instrumentation now captures structured logs, heartbeat telemetry, and SQLite persistence for each Maestro Baileys instance.",
+  "instances": [
+    {
+      "instanceId": "inst_691e0bb420cbd",
+      "status": "frequent disconnects",
+      "observations": "connection.update events now record normalized disconnect reason + category (e.g. conflict/sessionExpired) before reconnect attempts are scheduled.",
+      "metrics": {
+        "lastDisconnect": "<see logs>",
+        "reconnectCount": "persisted per diag stats",
+        "avgConnectedSeconds": "computed from diag events"
+      }
+    },
+    {
+      "instanceId": "inst_6977f4fc5874c",
+      "status": "stable",
+      "observations": "Used as baseline by the diag endpoint; heartbeats and event counts captured to compare against the problematic instance."
+    }
+  ],
+  "instrumentation": {
+    "structuredLogs": "whatsapp-server-intelligent.js (connection.update, creds.update, messages.upsert, presence.update, errors)",
+    "diagPersistence": "db-updated.js (diag_events, diag_heartbeats, instance stats)",
+    "heartbeat": {
+      "intervalMs": 30000,
+      "telemetry": ["uptime", "memRssMb", "cpuLoad", "event loop lag", "listener count", "socket count", "http ping"]
+    }
+  },
+  "diagEndpoints": [
+    {
+      "route": "/internal/diag/instances",
+      "access": "token via header/query (?diag_key)/debug",
+      "details": "returns summaries, event history, disconnect counts, durations, heartbeats"
+    },
+    {
+      "route": "/internal/diag/instances/:id",
+      "details": "per-instance detail with query limits"
+    }
+  ],
+  "monitoring": {
+    "script": "tools/diag_monitor.js",
+    "reportsDir": "storage/diag_reports",
+    "behavior": "Polls diag endpoint every 30s, records new disconnect IDs, writes latest + NDJSON history"
+  },
+  "hypothesis": "inst_691e0bb420cbd experiences repeated connection resets (category conflict/connectionClosed) before a reconnect attempt; likely residual session data or race on concurrent logins triggering WhatsApp conflicts."
+}

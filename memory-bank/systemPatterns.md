@@ -64,3 +64,21 @@ index.php (Admin Dashboard)
    - Status checked periodically and cached in database
    - UI displays templates by approval status (approved/pending/rejected)
    - Automatic updates via cron job script
+
+## GitNexus Knowledge Graph
+
+**Integration Date:** March 2026
+**Purpose:** Prevent regressions, understand architectural impact
+
+### Key Patterns Indexed:
+1. **AI Configuration Hierarchy:** `loadAIConfig()` → instance settings → prompts
+2. **Message Processing Flow:** Webhook → handlers → AI → dispatch → Meta API
+3. **Instance Management:** master-server → worker processes → Baileys sockets
+4. **Database Layer:** db-updated.js → SQLite → settings/messages/contacts
+
+### Critical Dependency Chains (verified by GitNexus):
+- `generateAIResponse()` ← 47 callers (any change has wide impact)
+- `loadAIConfig()` ← 12 callers (affects all AI responses)
+- `processMessageWithAI()` ← webhook handlers (core message flow)
+
+**Always consult:** `memory-bank/gitnexus.md` before architectural changes

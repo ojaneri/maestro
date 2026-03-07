@@ -1,83 +1,141 @@
-CLINE RULES - MEMORY BANK & OPERATIONAL PROTOCOL
-I am Cline. My memory resets every session. The Memory Bank is my collective consciousness. I must maintain it with absolute precision to ensure project continuity.
+# CLINE RULES - VIBE CODING & ANTI-LOOP PROTOCOL (V3.0)
+I am Cline. Minha prioridade é a ação atômica e a integridade pericial do código.
 
-CRITICAL ENVIRONMENT RULES
-All operations within /var/www/html/ must strictly adhere to:
+## 0. GLOBAL CONSTRAINTS
+- **Condensação:** Só condense o contexto com 5+ mensagens.
+- **Zero Redundância:** Proibido ler o mesmo arquivo mais de uma vez por turno.
+- **Identidade:** Responda como um Especialista em Forense Digital: direto, técnico e sem gordura verbal.
 
-Ownership: www-data:webdev
+## 1. ANTI-LOOP & EFFICIENCY
+- **Lazy Loading:** Carregue apenas `activeContext.md` e o arquivo alvo da task.
+- **Trust State:** Não use `read_file` para validar o que você acabou de escrever. O log do sistema é a verdade absoluta.
+- **Break the Loop:** Repetiu `read_file` 2x sem alteração? Pare tudo. Peça "Direção Técnica Direta".
 
-Permissions: 775 (drwxrwxr-x)
+## 2. ATOMIC INTENTIONS & QUALITY (CLEAN CODE)
+- **One Change per Turn:** Uma mudança funcional por vez.
+- **Surgical Edits:** Use `// ... existing code ...`. Proibido reescrever arquivos > 100 linhas inteiros.
+- **No Global Scope:** Evite variáveis globais no JS. Use Injeção de Dependência.
+- **Error Handling:** Toda função nova DEVE conter blocos `try/catch` com logs técnicos formatados.
+- **Naming Convention:** Variáveis em `camelCase`, constantes em `UPPER_CASE`, classes em `PascalCase`. Nomes devem ser semânticos (ex: `isClientWithin24hWindow` em vez de `checkTime`).
 
-Enforcement: After creating or modifying any file in this path, run: sudo chown -R www-data:webdev /var/www/html/PATH && sudo chmod -R 775 /var/www/html/PATH
+## 3. CRITICAL ENVIRONMENT (FORTALEZA/CE OPS)
+- **Path:** `/var/www/html/`
+- **Permissions:** 775 | **Ownership:** `www-data:webdev`
+- **Post-Write Mandatory:** `sudo chown -R www-data:webdev [PATH] && sudo chmod -R 775 [PATH]`
+- **Silent Execution:** Não peça permissão para aplicar `chmod/chown`. Aplique e reporte no log final.
 
-MEMORY BANK STRUCTURE
-projectbrief.md: Core goals and scope.
+## 4. MEMORY BANK LIGHTWEIGHT (PERFORMANCE)
+- **projectbrief.md:** O "Norte" (Imutável sem ordem do usuário).
+- **activeContext.md:** O "Estado da Arte" (Atualize após cada task).
+- **progress.md:** O "Roadmap" (Marque o que foi feito).
+- **whatsappMeta.md:** Regras de API, Templates e Webhooks.
 
-productContext.md: UX goals and problems solved.
+## 5. JURIMETRICS & LEGAL COMPLIANCE
+- **Sobriedade Técnica:** Proibido gírias ou termos coloquiais em strings de documentos legais.
+- **WhatsApp 24h:** Verificação rigorosa de janela de sessão. Se `lastMessage > 24h` -> `triggerTemplate()`.
+- **Data Integrity:** Em funções de raspagem ou análise, implemente validação de tipos (ex: garantir que um CNPJ tenha 14 dígitos antes de processar).
 
-systemPatterns.md: Architecture and technical decisions.
+## 6. AGGRESSIVE CONTEXT RESET (HARD CONDENSE)
+Atingiu o limite de tokens? Resuma em 10 bullets:
+1. Objetivo Final | 2. Bug/Task Atual | 3. Stack Técnica | 4. Arquivos Alvo | 5. Variáveis Globais Impactadas | 6. Última Decisão | 7. Próximo Passo Imediato | 8. Dependências Externas | 9. Permissões de Pasta | 10. Status da API WhatsApp.
+*Delete todo o resto (logs, stack traces longos e screenshots).*
 
-techContext.md: Stack, constraints, and dependencies.
+## 7. TESTES OBRIGATÓRIOS (FUNCTION CALLING)
+Após qualquer modificação em AI/function calling, executar testes:
 
-activeContext.md: Current focus and active decisions.
+### Teste Instance 3013
+```bash
+# Executar teste de function calling
+node test-instance-3013.js
+```
 
-progress.md: Status, what works, and roadmap.
+### Teste Debug Command
+```bash
+# Executar teste de debug via WhatsApp
+node tests/integration/debug-command.test.js
+```
 
-commonErrors.md: Log of past errors, solutions, and prevention.
+## 8. TEST PROMPT RULE (OBRIGATÓRIO)
+Antes de finalizar qualquer task que envolva:
+- Nova funcionalidade
+- Modificação de API
+- Alteração em AI/function calling
+- Mudança em handlers de mensagem
 
-whatsappMeta.md: Meta API rules, 24h window, and template functions.
+**SEMPRE pergunte ao usuário:**
+"Deseja que eu crie testes unitários, de integração ou E2E para esta funcionalidade?"
 
-CHECKPOINT PROTOCOL
-STARTUP CHECKPOINT
+If the user confirms, create:
+- **Unit tests**: `tests/unit/` - Test individual functions/modules
+- **Integration tests**: `tests/integration/` - Test API endpoints and workflows
+- **E2E tests**: `tests/e2e/` - Test complete user flows
 
-Read ALL Memory Bank files first.
+Add the new test to `tests/run-tests.sh` for CI integration.
 
-Sync physical file structure with progress.md.
+**Critérios de sucesso:**
+- ✅ Mensagem enviada com sucesso (HTTP 200)
+- ✅ IA processa a mensagem
+- ✅ Resposta da IA aparece nos logs
+- ✅ Function calls são detectadas e executadas
 
-Validate /var/www/html/ permissions.
+**Quando executar:**
+- Após modificar arquivos em `src/whatsapp-server/ai/`
+- Após adicionar novas tools/functions
+- Após alterações em `dispatchAIResponse()`
+- Após modificações em `gemini.js` ou `openai.js`
 
-PLANNING CHECKPOINT
+**Verificação manual:**
+```bash
+# Ver logs da instância
+tail -100 instance_inst_*.log | grep -i "ai\|function\|gemini"
 
-State intent of change.
+# Verificar function calls
+tail -100 instance_inst_*.log | grep -i "Function calls detected"
+```
 
-List affected Memory Bank files.
+## GitNexus Integration (KNOWLEDGE GRAPH - PREVENT REGRESSIONS)
 
-Require user approval for High-Impact changes (DB schema, Auth, Core logic).
+**ALWAYS** consult GitNexus antes de modificações que possam causar breaking changes:
 
-EXECUTION CHECKPOINT
+### When to Use GitNexus:
+1. **Before Refactoring:** Check blast radius with impact analysis
+2. **Before Renaming:** Verify all references and dependencies
+3. **Debugging Issues:** Trace execution flows through call chains
+4. **Architecture Questions:** Explore clusters and relationships
 
-Perform atomic changes.
+### Quick Start Commands:
+```bash
+# Check if index is fresh (run this FIRST)
+gitnexus status
 
-Apply permission enforcement (chown/chmod) immediately after write.
+# Re-index if stale
+gitnexus analyze
 
-WhatsApp Rule: If >24h since last customer message, reject free-text and provide template() options.
+# Impact analysis before changing code
+# Example: Before modifying loadAIConfig in src/whatsapp-server/ai/index.js
+# Use GitNexus impact tool to see what depends on it
+```
 
-COMPLETION CHECKPOINT
+### GitNexus Skills (Auto-installed):
+- `.claude/skills/gitnexus/gitnexus-exploring/` - Navigate unfamiliar code
+- `.claude/skills/gitnexus/gitnexus-impact-analysis/` - Blast radius analysis
+- `.claude/skills/gitnexus/gitnexus-debugging/` - Trace bugs through call chains
+- `.claude/skills/gitnexus/gitnexus-refactoring/` - Plan safe refactors
 
-Update progress.md and activeContext.md.
+### MCP Tools Available:
+1. `context({name: "function_name"})` - 360° symbol view
+2. `impact({target: "ClassName", direction: "upstream"})` - What depends on this?
+3. `detect_changes({scope: "all"})` - Pre-commit impact analysis
+4. `rename({symbol_name: "old", new_name: "new"})` - Multi-file rename
+5. `query({query: "search term"})` - Hybrid search (BM25 + semantic)
 
-Clean code of temporary TODOs.
+### Integration Rules:
+- **Pre-Modification:** Always run `impact()` on critical functions
+- **Pre-Commit:** Run `detect_changes()` to verify no breaking changes
+- **Cross-File Changes:** Use `rename()` tool instead of manual find/replace
+- **Debugging:** Start with `context()` to understand symbol relationships
 
-Provide concise summary for the next session.
-
-BEST PRACTICES & EFFICIENCY
-Zero Assumption: If data is missing from techContext.md, ask or explore. Do not guess.
-
-Atomic Updates: Update Memory Bank files immediately after significant changes.
-
-Context Integrity: Move settled decisions from activeContext.md to systemPatterns.md.
-
-Error Prevention: Consult commonErrors.md before starting new tasks to avoid regression.
-
-Meta API: Use syntax: template("ID", "var1", "var2", "var3").
-
-DOCUMENTATION UPDATE TRIGGER
-When "update memory bank" is requested:
-
-Audit all .md files.
-
-Cross-reference activeContext.md with latest terminal logs.
-
-Update "What Works" and "Known Issues" in progress.md.
-
-Verify all /var/www/html/ ownership and permissions.
+### Read These Files:
+- `AGENTS.md` - GitNexus overview and workflow
+- `CLAUDE.md` - Same as AGENTS.md (alternative name)
+- `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` - Complete tool reference

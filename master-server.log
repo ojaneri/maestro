@@ -1,0 +1,80 @@
+[2026-03-07T11:28:23.774Z] Master server started on port 3001
+[2026-03-07T11:28:23.778Z] [DEBUG] [component=master-server | type=general] Master server started on port 3001
+[2026-03-07T11:28:23.779Z] Starting health monitoring
+[2026-03-07T11:28:23.781Z] Connected to database
+[2026-03-07T11:28:23.789Z] Tables created/verified
+[2026-03-07T11:28:23.798Z] Loaded 4 total instances
+[2026-03-07T11:28:23.798Z] Loaded 4 instances from database
+[2026-03-07T11:28:23.799Z] [DEBUG] [component=master-server | type=general] Loaded 4 instances from database
+[2026-03-07T11:28:23.799Z] Instance: inst_425baca956a22f2a, status: qr, port: 3010
+[2026-03-07T11:28:23.800Z] [DEBUG] [component=master-server | type=general] Instance: inst_425baca956a22f2a, status: qr, port: 3010
+[2026-03-07T11:28:23.800Z] Starting worker for instance inst_425baca956a22f2a on port 3010
+[2026-03-07T11:28:23.800Z] [DEBUG] [component=master-server | type=general] Starting worker for instance inst_425baca956a22f2a on port 3010
+[2026-03-07T11:28:23.801Z] Cleaning up any process on port 3010...
+[2026-03-07T11:28:23.802Z] [DEBUG] [component=worker-manager | type=general] Cleaning up any process on port 3010...
+[2026-03-07T11:28:23.810Z] Instance: inst_6992ec9e78d1c, status: connected, port: 3011
+[2026-03-07T11:28:23.810Z] [DEBUG] [component=master-server | type=general] Instance: inst_6992ec9e78d1c, status: connected, port: 3011
+[2026-03-07T11:28:23.811Z] Starting worker for instance inst_6992ec9e78d1c on port 3011
+[2026-03-07T11:28:23.811Z] [DEBUG] [component=master-server | type=general] Starting worker for instance inst_6992ec9e78d1c on port 3011
+[2026-03-07T11:28:23.812Z] Cleaning up any process on port 3011...
+[2026-03-07T11:28:23.812Z] [DEBUG] [component=worker-manager | type=general] Cleaning up any process on port 3011...
+[2026-03-07T11:28:23.816Z] Instance: inst_6992ed0c735f0, status: connected, port: 3013
+[2026-03-07T11:28:23.816Z] [DEBUG] [component=master-server | type=general] Instance: inst_6992ed0c735f0, status: connected, port: 3013
+[2026-03-07T11:28:23.816Z] Starting worker for instance inst_6992ed0c735f0 on port 3013
+[2026-03-07T11:28:23.817Z] [DEBUG] [component=master-server | type=general] Starting worker for instance inst_6992ed0c735f0 on port 3013
+[2026-03-07T11:28:23.817Z] Cleaning up any process on port 3013...
+[2026-03-07T11:28:23.818Z] [DEBUG] [component=worker-manager | type=general] Cleaning up any process on port 3013...
+[2026-03-07T11:28:23.821Z] Instance: inst_6992eddf5c2a7, status: connected, port: 3017
+[2026-03-07T11:28:23.822Z] [DEBUG] [component=master-server | type=general] Instance: inst_6992eddf5c2a7, status: connected, port: 3017
+[2026-03-07T11:28:23.822Z] Starting worker for instance inst_6992eddf5c2a7 on port 3017
+[2026-03-07T11:28:23.822Z] [DEBUG] [component=master-server | type=general] Starting worker for instance inst_6992eddf5c2a7 on port 3017
+[2026-03-07T11:28:23.823Z] Cleaning up any process on port 3017...
+[2026-03-07T11:28:23.823Z] [DEBUG] [component=worker-manager | type=general] Cleaning up any process on port 3017...
+[2026-03-07T11:28:24.846Z] Starting worker for instance inst_6992ed0c735f0 on port 3013
+[2026-03-07T11:28:24.846Z] [DEBUG] [component=worker-manager | type=general] Starting worker for instance inst_6992ed0c735f0 on port 3013
+[2026-03-07T11:28:24.858Z] Starting worker for instance inst_6992ec9e78d1c on port 3011
+[2026-03-07T11:28:24.858Z] [DEBUG] [component=worker-manager | type=general] Starting worker for instance inst_6992ec9e78d1c on port 3011
+[2026-03-07T11:28:24.862Z] Starting worker for instance inst_425baca956a22f2a on port 3010
+[2026-03-07T11:28:24.862Z] [DEBUG] [component=worker-manager | type=general] Starting worker for instance inst_425baca956a22f2a on port 3010
+[2026-03-07T11:28:24.866Z] Starting worker for instance inst_6992eddf5c2a7 on port 3017
+[2026-03-07T11:28:24.866Z] [DEBUG] [component=worker-manager | type=general] Starting worker for instance inst_6992eddf5c2a7 on port 3017
+[2026-03-07T11:28:27.891Z] Worker inst_425baca956a22f2a is ready after 1 attempts
+[2026-03-07T11:28:27.891Z] [DEBUG] [component=worker-manager | type=general] Worker inst_425baca956a22f2a is ready after 1 attempts
+[2026-03-07T11:28:27.896Z] Worker inst_6992ec9e78d1c is ready after 1 attempts
+[2026-03-07T11:28:27.897Z] [DEBUG] [component=worker-manager | type=general] Worker inst_6992ec9e78d1c is ready after 1 attempts
+[2026-03-07T11:28:27.899Z] Worker started for instance inst_425baca956a22f2a
+[2026-03-07T11:28:27.899Z] [DEBUG] [component=worker-manager | type=general] Worker started for instance inst_425baca956a22f2a
+[2026-03-07T11:28:27.900Z] Worker started for instance inst_6992ec9e78d1c
+[2026-03-07T11:28:27.903Z] [DEBUG] [component=worker-manager | type=general] Worker started for instance inst_6992ec9e78d1c
+[2026-03-07T11:28:28.067Z] Worker inst_6992eddf5c2a7 is ready after 1 attempts
+[2026-03-07T11:28:28.068Z] [DEBUG] [component=worker-manager | type=general] Worker inst_6992eddf5c2a7 is ready after 1 attempts
+[2026-03-07T11:28:28.070Z] Worker started for instance inst_6992eddf5c2a7
+[2026-03-07T11:28:28.070Z] [DEBUG] [component=worker-manager | type=general] Worker started for instance inst_6992eddf5c2a7
+[2026-03-07T11:28:28.109Z] Worker inst_6992ed0c735f0 is ready after 1 attempts
+[2026-03-07T11:28:28.109Z] [DEBUG] [component=worker-manager | type=general] Worker inst_6992ed0c735f0 is ready after 1 attempts
+[2026-03-07T11:28:28.111Z] Worker started for instance inst_6992ed0c735f0
+[2026-03-07T11:28:28.112Z] [DEBUG] [component=worker-manager | type=general] Worker started for instance inst_6992ed0c735f0
+[2026-03-07T11:28:28.782Z] Loaded 4 total instances
+[2026-03-07T11:28:33.780Z] [VIGILANTE] Iniciando varredura de processos fantasmas...
+[2026-03-07T11:28:33.781Z] [DEBUG] [component=master-server | type=general] [VIGILANTE] Iniciando varredura de processos fantasmas...
+[2026-03-07T11:28:53.790Z] Loaded 4 total instances
+[2026-03-07T11:29:23.798Z] Loaded 4 total instances
+[2026-03-07T11:29:53.801Z] Loaded 4 total instances
+[2026-03-07T11:30:23.780Z] [VIGILANTE] Iniciando varredura de processos fantasmas...
+[2026-03-07T11:30:23.781Z] [DEBUG] [component=master-server | type=general] [VIGILANTE] Iniciando varredura de processos fantasmas...
+[2026-03-07T11:30:23.808Z] Loaded 4 total instances
+[2026-03-07T11:30:53.801Z] Loaded 4 total instances
+[2026-03-07T11:31:23.830Z] Loaded 4 total instances
+[2026-03-07T11:31:53.830Z] Loaded 4 total instances
+[2026-03-07T11:32:23.810Z] [VIGILANTE] Iniciando varredura de processos fantasmas...
+[2026-03-07T11:32:23.810Z] [DEBUG] [component=master-server | type=general] [VIGILANTE] Iniciando varredura de processos fantasmas...
+[2026-03-07T11:32:23.832Z] Loaded 4 total instances
+[2026-03-07T11:32:53.847Z] Loaded 4 total instances
+[2026-03-07T11:33:23.869Z] Loaded 4 total instances
+[2026-03-07T11:33:53.883Z] Loaded 4 total instances
+[2026-03-07T11:34:23.815Z] [VIGILANTE] Iniciando varredura de processos fantasmas...
+[2026-03-07T11:34:23.815Z] [DEBUG] [component=master-server | type=general] [VIGILANTE] Iniciando varredura de processos fantasmas...
+[2026-03-07T11:34:23.884Z] Loaded 4 total instances
+[2026-03-07T11:34:53.915Z] Loaded 4 total instances
+[2026-03-07T11:35:23.916Z] Loaded 4 total instances
+[2026-03-07T11:35:53.935Z] Loaded 4 total instances

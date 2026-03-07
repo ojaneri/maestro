@@ -1,0 +1,16 @@
+[Unit]
+Description=Maestro Master Server
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/var/www/html/maestro.janeri.com.br
+ExecStart=/usr/bin/node /var/www/html/maestro.janeri.com.br/master-server.js
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/www/html/maestro.janeri.com.br/master-server.log
+StandardError=append:/var/www/html/maestro.janeri.com.br/master-server.log
+
+[Install]
+WantedBy=multi-user.target

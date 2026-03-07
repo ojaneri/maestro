@@ -1,0 +1,975 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maestro Test Report - 20260301_163018</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); min-height: 100vh; padding: 20px; color: #eee; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        header { text-align: center; margin-bottom: 30px; }
+        h1 { font-size: 2.5em; margin-bottom: 10px; background: linear-gradient(90deg, #00d4ff, #7c3aed); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .meta { color: #888; font-size: 0.9em; }
+        .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
+        .card { background: rgba(255,255,255,0.05); border-radius: 12px; padding: 20px; text-align: center; border: 1px solid rgba(255,255,255,0.1); }
+        .card.success { border-color: #10b981; background: rgba(16,185,129,0.1); }
+        .card.error { border-color: #ef4444; background: rgba(239,68,68,0.1); }
+        .card h3 { font-size: 2em; margin-bottom: 5px; }
+        .card.success h3 { color: #10b981; }
+        .card.error h3 { color: #ef4444; }
+        .card p { color: #aaa; font-size: 0.9em; }
+        .status-badge { display: inline-block; padding: 8px 16px; border-radius: 20px; font-weight: bold; font-size: 1.2em; margin-bottom: 20px; }
+        .status-badge.success { background: rgba(16,185,129,0.2); color: #10b981; border: 2px solid #10b981; }
+        .status-badge.error { background: rgba(239,68,68,0.2); color: #ef4444; border: 2px solid #ef4444; }
+        .test-suites { margin-top: 30px; }
+        .suite { background: rgba(255,255,255,0.03); border-radius: 12px; margin-bottom: 20px; overflow: hidden; border: 1px solid rgba(255,255,255,0.1); }
+        .suite-header { background: rgba(255,255,255,0.05); padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+        .suite-header:hover { background: rgba(255,255,255,0.08); }
+        .suite-title { font-size: 1.1em; font-weight: 600; }
+        .suite-stats { display: flex; gap: 15px; }
+        .suite-stat { padding: 4px 12px; border-radius: 12px; font-size: 0.85em; }
+        .suite-stat.pass { background: rgba(16,185,129,0.2); color: #10b981; }
+        .suite-stat.fail { background: rgba(239,68,68,0.2); color: #ef4444; }
+        .suite-tests { display: none; padding: 15px 20px; }
+        .suite.open .suite-tests { display: block; }
+        .test-item { padding: 10px 15px; margin: 5px 0; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; }
+        .test-item.pass { background: rgba(16,185,129,0.1); border-left: 3px solid #10b981; }
+        .test-item.fail { background: rgba(239,68,68,0.1); border-left: 3px solid #ef4444; }
+        .test-name { font-family: 'Monaco','Menlo',monospace; font-size: 0.9em; }
+        .test-time { color: #888; font-size: 0.8em; }
+        .test-status { font-size: 1.2em; }
+        .footer { text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.1); color: #666; font-size: 0.85em; }
+        .toggle-icon { transition: transform 0.3s; }
+        .suite.open .toggle-icon { transform: rotate(180deg); }
+        .test-description { font-size: 0.8em; color: #888; margin-top: 5px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🧪 Maestro Test Report</h1>
+            <p class="meta">Executado em: 01/03/2026, 16:31:17</p>
+            <p class="meta">Duração: 59086ms (59.086s)</p>
+        </header>
+        <div style="text-align: center;">
+            <span class="status-badge error">✗ ALGUNS TESTES FALHARAM</span>
+        </div>
+        <div class="summary">
+            <div class="card"><h3>7</h3><p>Suítes de Teste</p></div>
+            <div class="card success"><h3>72</h3><p>Testes Passados</p></div>
+            <div class="card error"><h3>1</h3><p>Testes Falhados</p></div>
+            <div class="card"><h3>73</h3><p>Total de Testes</p></div>
+        </div>
+        <div class="test-suites">
+            <h2 style="margin-bottom: 20px; color: #ccc;">📋 Detalhamento por Suíte</h2>
+
+        <div class="suite" id="suite-0">
+            <div class="suite-header" onclick="document.getElementById('suite-0').classList.toggle('open')">
+                <span class="suite-title">debug-command-enhanced</span>
+                <div class="suite-stats">
+                    <span class="suite-stat pass">4 ✓</span>
+                    <span class="suite-stat fail">1 ✗</span>
+                    <span class="toggle-icon">▼</span>
+                </div>
+            </div>
+            <div class="suite-tests">
+    
+                <div class="test-item fail">
+                    <div>
+                        <div class="test-name">Should respond with debug info and NOT send to AI</div>
+                        <div class="test-description">Debug Command #debug# Enhanced</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">18223ms</span>
+                        <span class="test-status">✗</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">Debug response should have correct format</div>
+                        <div class="test-description">Debug Command #debug# Enhanced</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">3ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">Debug command should include all required fields</div>
+                        <div class="test-description">Debug Command #debug# Enhanced</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">4ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">System prompt should be truncated at 200 chars</div>
+                        <div class="test-description">Debug Command #debug# Enhanced</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">3ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">Should work on different instances with different configs</div>
+                        <div class="test-description">Debug Command Multiple Instances</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">4427ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+            </div>
+        </div>
+    
+        <div class="suite" id="suite-1">
+            <div class="suite-header" onclick="document.getElementById('suite-1').classList.toggle('open')">
+                <span class="suite-title">debug-command</span>
+                <div class="suite-stats">
+                    <span class="suite-stat pass">3 ✓</span>
+                    <span class="suite-stat fail">0 ✗</span>
+                    <span class="toggle-icon">▼</span>
+                </div>
+            </div>
+            <div class="suite-tests">
+    
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should send #debug# message to 5585999999000 via port 3011</div>
+                        <div class="test-description">Debug Command Integration Tests</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">28958ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should return valid instance status</div>
+                        <div class="test-description">Debug Command Integration Tests</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">4ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should return valid health check</div>
+                        <div class="test-description">Debug Command Integration Tests</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">1ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+            </div>
+        </div>
+    
+        <div class="suite" id="suite-2">
+            <div class="suite-header" onclick="document.getElementById('suite-2').classList.toggle('open')">
+                <span class="suite-title">messaging</span>
+                <div class="suite-stats">
+                    <span class="suite-stat pass">6 ✓</span>
+                    <span class="suite-stat fail">0 ✗</span>
+                    <span class="toggle-icon">▼</span>
+                </div>
+            </div>
+            <div class="suite-tests">
+    
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should send text message to 558586030781</div>
+                        <div class="test-description">WhatsApp Messaging API - Instance 3011 > POST /send-message - Text Message</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">2684ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should send image message via URL to 558586030781</div>
+                        <div class="test-description">WhatsApp Messaging API - Instance 3011 > POST /send-message - Image Message (URL)</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">632ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should send video message via URL to 558586030781</div>
+                        <div class="test-description">WhatsApp Messaging API - Instance 3011 > POST /send-message - Video Message (URL)</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">394ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should send image message via base64 to 558586030781</div>
+                        <div class="test-description">WhatsApp Messaging API - Instance 3011 > POST /send-message - Image (Base64)</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">328ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should return instance connection status</div>
+                        <div class="test-description">WhatsApp Messaging API - Instance 3011 > GET /status - Instance Status</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">6ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should return instance health</div>
+                        <div class="test-description">WhatsApp Messaging API - Instance 3011 > GET /health - Instance Health</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">2ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+            </div>
+        </div>
+    
+        <div class="suite" id="suite-3">
+            <div class="suite-header" onclick="document.getElementById('suite-3').classList.toggle('open')">
+                <span class="suite-title">mockData</span>
+                <div class="suite-stats">
+                    <span class="suite-stat pass">18 ✓</span>
+                    <span class="suite-stat fail">0 ✗</span>
+                    <span class="toggle-icon">▼</span>
+                </div>
+            </div>
+            <div class="suite-tests">
+    
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should generate message with required fields</div>
+                        <div class="test-description">Mock Data Helpers > mockMessage</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">3ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should allow overriding defaults</div>
+                        <div class="test-description">Mock Data Helpers > mockMessage</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should create text message with correct format</div>
+                        <div class="test-description">Mock Data Helpers > mockTextMessage</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">1ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should create image message with imageMessage object</div>
+                        <div class="test-description">Mock Data Helpers > mockImageMessage</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">1ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should generate contact with required fields</div>
+                        <div class="test-description">Mock Data Helpers > mockContact</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">1ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should generate instance with valid port range</div>
+                        <div class="test-description">Mock Data Helpers > mockInstance</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">2ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should allow custom instance_id</div>
+                        <div class="test-description">Mock Data Helpers > mockInstance</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">1ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should generate scheduled message with future timestamp</div>
+                        <div class="test-description">Mock Data Helpers > mockScheduledMessage</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">1ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should generate user with valid role</div>
+                        <div class="test-description">Mock Data Helpers > mockUser</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">2ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should generate AI config with valid provider</div>
+                        <div class="test-description">Mock Data Helpers > mockAIConfig</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">1ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should generate valid health response</div>
+                        <div class="test-description">Mock Data Helpers > mockHealthResponse</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should generate valid status response</div>
+                        <div class="test-description">Mock Data Helpers > mockStatusResponse</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">1ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should generate valid send message response</div>
+                        <div class="test-description">Mock Data Helpers > mockSendMessageResponse</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should generate Brazilian phone number format</div>
+                        <div class="test-description">Mock Data Helpers > generateValidPhoneNumber</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should respect custom country code</div>
+                        <div class="test-description">Mock Data Helpers > generateValidPhoneNumber</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should generate valid WhatsApp JID</div>
+                        <div class="test-description">Mock Data Helpers > generateValidJID</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should generate group JID format</div>
+                        <div class="test-description">Mock Data Helpers > generateGroupJID</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should generate test db path</div>
+                        <div class="test-description">Mock Data Helpers > generateTestDatabasePath</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+            </div>
+        </div>
+    
+        <div class="suite" id="suite-4">
+            <div class="suite-header" onclick="document.getElementById('suite-4').classList.toggle('open')">
+                <span class="suite-title">ai-prompt-isolation</span>
+                <div class="suite-stats">
+                    <span class="suite-stat pass">7 ✓</span>
+                    <span class="suite-stat fail">0 ✗</span>
+                    <span class="toggle-icon">▼</span>
+                </div>
+            </div>
+            <div class="suite-tests">
+    
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">Instance should use ONLY its own ai_system_prompt (no global inheritance)</div>
+                        <div class="test-description">AI Prompt Isolation</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">12ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">Different instances should have different prompts (isolation)</div>
+                        <div class="test-description">AI Prompt Isolation</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">5ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">Should log warning when instance has no ai_system_prompt</div>
+                        <div class="test-description">AI Prompt Isolation</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">3ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">Should handle missing db gracefully</div>
+                        <div class="test-description">AI Prompt Isolation</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">1ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">Should use ai_config JSON as fallback when simple fields are empty</div>
+                        <div class="test-description">AI Prompt Isolation</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">6ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">Should NOT inherit any global settings (strict isolation)</div>
+                        <div class="test-description">AI Prompt Isolation</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">2ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">persistAIConfig should save settings for specific instance</div>
+                        <div class="test-description">AI Config Persistence</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">5ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+            </div>
+        </div>
+    
+        <div class="suite" id="suite-5">
+            <div class="suite-header" onclick="document.getElementById('suite-5').classList.toggle('open')">
+                <span class="suite-title">prompt-leak-regression</span>
+                <div class="suite-stats">
+                    <span class="suite-stat pass">6 ✓</span>
+                    <span class="suite-stat fail">0 ✗</span>
+                    <span class="toggle-icon">▼</span>
+                </div>
+            </div>
+            <div class="suite-tests">
+    
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">Multiple instances should NOT leak prompts to each other</div>
+                        <div class="test-description">Prompt Leak Regression Tests</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">9ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">Global settings should NOT be inherited by instances</div>
+                        <div class="test-description">Prompt Leak Regression Tests</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">3ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">Concurrent config loads should maintain isolation</div>
+                        <div class="test-description">Prompt Leak Regression Tests</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">7ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">Should log warnings for missing prompts</div>
+                        <div class="test-description">Prompt Leak Regression Tests</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">3ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">Empty database should return defaults (not global)</div>
+                        <div class="test-description">Prompt Leak Regression Tests</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">5ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">OLD BUG: Would merge global into instance (should NOT happen now)</div>
+                        <div class="test-description">Regression: Original Bug Behavior</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">3ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+            </div>
+        </div>
+    
+        <div class="suite" id="suite-6">
+            <div class="suite-header" onclick="document.getElementById('suite-6').classList.toggle('open')">
+                <span class="suite-title">message-splitting-typing</span>
+                <div class="suite-stats">
+                    <span class="suite-stat pass">28 ✓</span>
+                    <span class="suite-stat fail">0 ✗</span>
+                    <span class="toggle-icon">▼</span>
+                </div>
+            </div>
+            <div class="suite-tests">
+    
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should split message by # into separate segments</div>
+                        <div class="test-description">Message Splitting by # > splitHashSegments</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">1ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should handle single segment without #</div>
+                        <div class="test-description">Message Splitting by # > splitHashSegments</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should handle empty string</div>
+                        <div class="test-description">Message Splitting by # > splitHashSegments</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should handle null/undefined input</div>
+                        <div class="test-description">Message Splitting by # > splitHashSegments</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should filter out empty segments</div>
+                        <div class="test-description">Message Splitting by # > splitHashSegments</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should handle multiple consecutive #</div>
+                        <div class="test-description">Message Splitting by # > splitHashSegments</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should trim whitespace from segments</div>
+                        <div class="test-description">Message Splitting by # > splitHashSegments</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should handle # at start and end</div>
+                        <div class="test-description">Message Splitting by # > splitHashSegments</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">1ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should handle numbers and special chars in segments</div>
+                        <div class="test-description">Message Splitting by # > splitHashSegments</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should split message by # into separate segments</div>
+                        <div class="test-description">Message Splitting by # > parseTextSegments</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should return single element array for text without #</div>
+                        <div class="test-description">Message Splitting by # > parseTextSegments</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">1ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should return empty array for null/undefined</div>
+                        <div class="test-description">Message Splitting by # > parseTextSegments</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should filter empty segments</div>
+                        <div class="test-description">Message Splitting by # > parseTextSegments</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should handle only # characters</div>
+                        <div class="test-description">Message Splitting by # > parseTextSegments</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">1ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should calculate minimum delay for short message</div>
+                        <div class="test-description">Typing Indicator Delay Calculation > computeTypingDelayMs</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should calculate delay based on character count</div>
+                        <div class="test-description">Typing Indicator Delay Calculation > computeTypingDelayMs</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should cap at maximum 10 seconds</div>
+                        <div class="test-description">Typing Indicator Delay Calculation > computeTypingDelayMs</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">1ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should return 0 for empty string</div>
+                        <div class="test-description">Typing Indicator Delay Calculation > computeTypingDelayMs</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should return 0 for null/undefined</div>
+                        <div class="test-description">Typing Indicator Delay Calculation > computeTypingDelayMs</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">4ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should handle whitespace-only strings</div>
+                        <div class="test-description">Typing Indicator Delay Calculation > computeTypingDelayMs</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">1ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should add random variation to delay</div>
+                        <div class="test-description">Typing Indicator Delay Calculation > computeTypingDelayMs</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should calculate delay for medium-length message</div>
+                        <div class="test-description">Typing Indicator Delay Calculation > computeTypingDelayMs</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">1ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should use 30ms per character formula from ai/index.js</div>
+                        <div class="test-description">Typing Indicator Delay Calculation > Typing indicator integration with ai/index.js formula</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should cap at 15000ms in ai/index.js formula</div>
+                        <div class="test-description">Typing Indicator Delay Calculation > Typing indicator integration with ai/index.js formula</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should use minimum 1000ms for short messages</div>
+                        <div class="test-description">Typing Indicator Delay Calculation > Typing indicator integration with ai/index.js formula</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should simulate sending multiple #segmented messages with typing delays</div>
+                        <div class="test-description">End-to-End: Message Splitting with Typing Simulation</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time">1ms</span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should handle long message without # splitting</div>
+                        <div class="test-description">End-to-End: Message Splitting with Typing Simulation</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+                <div class="test-item pass">
+                    <div>
+                        <div class="test-name">should calculate total time for multi-segment message</div>
+                        <div class="test-description">End-to-End: Message Splitting with Typing Simulation</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span class="test-time"></span>
+                        <span class="test-status">✓</span>
+                    </div>
+                </div>
+            
+            </div>
+        </div>
+    
+        </div>
+        <div class="footer">
+            <p>Gerado automaticamente pelo Maestro Test Runner</p>
+            <p>Versão: 1.0.0</p>
+        </div>
+    </div>
+</body>
+</html>

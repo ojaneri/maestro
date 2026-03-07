@@ -22,8 +22,12 @@ try {
 
 ensureExternalUsersSchema();
 
-session_start();
-debug_log('login.php: session started');
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+    debug_log('login.php: session started');
+} else {
+    debug_log('login.php: session already active, skipped session_start');
+}
 
 // Brute-force protection settings
 const MAX_FAILED_ATTEMPTS = 5;

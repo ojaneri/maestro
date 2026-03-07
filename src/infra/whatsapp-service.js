@@ -82,14 +82,7 @@ function buildAIDependencies() {
     return {
         sock: sock,
         db: db,
-        sendWhatsAppMessage: async (jid, content) => {
-            if (sock && sock.sendMessage) {
-                const payload = (content && typeof content === "object" && !Array.isArray(content))
-                    ? content
-                    : { text: String(content ?? "") }
-                await sock.sendMessage(jid, payload)
-            }
-        },
+        sendWhatsAppMessage: sendWhatsAppMessage,
         persistSessionMessage: async (data) => {
             if (db && typeof db.saveMessage === "function") {
                 await db.saveMessage(
@@ -130,7 +123,7 @@ function queueAIDispatch(aiService, remoteJid, messageText, delayMs, aiConfig = 
     if (existing?.timer) {
         clearTimeout(existing.timer)
     }
-    const entry = existing || { messages: [] }
+    const entry = existing || { messages: [], startedAt: Date.now(), delayMs: delayMs }
     entry.messages.push(messageText)
     entry.timer = setTimeout(async () => {
         pendingAiInputs.delete(remoteJid)
@@ -147,6 +140,36 @@ function queueAIDispatch(aiService, remoteJid, messageText, delayMs, aiConfig = 
         }
     }, delayMs)
     pendingAiInputs.set(remoteJid, entry)
+}
+
+function getPendingAiInputs(remoteJid = null) {
+    if (remoteJid) {
+        const entry = pendingAiInputs.get(remoteJid)
+        if (!entry) return null
+        const elapsed = Date.now() - entry.startedAt
+        const remaining = Math.max(0, entry.delayMs - elapsed)
+        return {
+            remoteJid,
+            pending: true,
+            remaining_seconds: Math.ceil(remaining / 1000),
+            delay_seconds: Math.ceil(entry.delayMs / 1000),
+            message_count: entry.messages.length
+        }
+    }
+
+    const all = []
+    pendingAiInputs.forEach((entry, jid) => {
+        const elapsed = Date.now() - entry.startedAt
+        const remaining = Math.max(0, entry.delayMs - elapsed)
+        all.push({
+            remoteJid: jid,
+            pending: true,
+            remaining_seconds: Math.ceil(remaining / 1000),
+            delay_seconds: Math.ceil(entry.delayMs / 1000),
+            message_count: entry.messages.length
+        })
+    })
+    return all
 }
 
 // LID to PN mapping cache (persistent across sessions)
@@ -830,10 +853,12 @@ function setupLIDEventHandlers() {
         const { messages, type } = event
         log(`Processing ${messages.length} messages (${type})`)
         
-        // Verbose debug logging for ALL messages
         for (const msg of messages) {
             const msgKey = msg.key || {}
             const msgRemoteJidKey = msgKey.remoteJid || msg.remoteJid || ""
+            
+            // Centralized Inbound Log
+            writeDebugLog('INBOUND', `Message received from ${msgRemoteJidKey}`, msg);
             const isGroup = typeof msgRemoteJidKey === "string" && msgRemoteJidKey.includes("@g.us")
             const isStatus = typeof msgRemoteJidKey === "string" && msgRemoteJidKey.startsWith("status@broadcast")
             const isInbound = msgKey.fromMe === false
@@ -1027,12 +1052,42 @@ async function restartWhatsApp() {
     }
 }
 
+/**
+ * Centralized verbose debug logger
+ */
+function writeDebugLog(category, message, data = null) {
+    const debugFilePath = path.join(__dirname, '../../debug.log');
+    if (!fs.existsSync(debugFilePath)) return;
+    
+    const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const instanceId = INSTANCE_ID || 'default';
+    let logLine = `[${timestamp}] [${instanceId}] [${category.toUpperCase()}] ${message}\n`;
+    
+    if (data) {
+        try {
+            const dataStr = typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data);
+            logLine += `DATA: ${dataStr}\n`;
+        } catch (e) {
+            logLine += `DATA: [Error stringifying data]\n`;
+        }
+    }
+    logLine += `--------------------------------------------------\n`;
+    
+    try {
+        fs.appendFileSync(debugFilePath, logLine);
+    } catch (err) {
+        console.error('Error writing to debug.log:', err.message);
+    }
+}
+
 async function sendWhatsAppMessage(jid, payload) {
     if (!sock || !whatsappConnected) {
-        // Placeholder
+        writeDebugLog('OUTBOUND_ERROR', `Failed to send to ${jid} - Socket not connected`);
         log("Message queued", jid)
         return { id: "queued", status: "queued" }
     }
+    
+    writeDebugLog('OUTBOUND', `Sending message to ${jid}`, payload);
     const result = await sock.sendMessage(jid, payload)
     log("Mensagem enviada para", jid)
     return result
@@ -1189,6 +1244,8 @@ module.exports = {
     restartWhatsApp,
     sendWhatsAppMessage,
     sendDebugInfo,
+    getPendingAiInputs,
+    writeDebugLog,
     // LID Resolution Functions
     resolveLIDtoPN,
     extractPNfromMessage,

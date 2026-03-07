@@ -1,0 +1,58 @@
+[default] Iniciando instância inteligente: default Porta: 3000
+[default] OpenAI SDK carregado
+[default] Database module carregado
+Starting WhatsApp Server on http://0.0.0.0:3000
+Instance ID: default
+Initializing modules...
+[default] Iniciando conexão Baileys...
+Connected to SQLite chat database
+Database journal mode set to WAL
+Database tables and indexes created successfully
+⚠️ The printQRInTerminal option has been deprecated. You will no longer receive QR codes in the terminal automatically. Please listen to the connection.update event yourself and handle the QR your way. You can remove this message by removing this opttion. This message will be removed in a future version.
+[default] Socket Baileys criado com sucesso
+[default] WhatsApp connection initialized for instance: default
+✓ Express app initialized
+✓ WebSocket server initialized
+Starting scheduler with 30000ms interval
+✓ Scheduler started
+Starting monitoring with 300000ms interval
+✓ Monitoring started
+✗ Failed to initialize AI: ai.initialize is not a function
+Health check at 2026-02-14T19:05:31.026Z: {
+  instanceId: undefined,
+  status: 'issues',
+  metrics: {
+    memoryUsage: 68,
+    cpuUsage: 1632173,
+    activeConnections: 0,
+    queueSize: 0,
+    uptime: 1.739682712,
+    heapUsed: 75,
+    heapTotal: 110
+  },
+  alarms: 1
+}
+
+╔════════════════════════════════════════╗
+║   WhatsApp Server running on :3000    ║
+╚════════════════════════════════════════╝
+
+[default] WhatsApp Server started successfully with modular architecture
+[default] Instance status persisted: starting starting
+[default] Database initialized successfully
+[default] Instance metadata loaded from database
+{"level":30,"time":"2026-02-14T19:05:31.104Z","pid":3595036,"hostname":"Server1","class":"baileys","browser":["Janeri WPP Panel","Chrome","1.0.0"],"helloMsg":{"clientHello":{"ephemeral":"PIg4ArXVztm86HowYcx1Ul54aOmD3i+Cbv4l8FQrTh4="}},"msg":"connected to WA"}
+{"level":30,"time":"2026-02-14T19:05:31.184Z","pid":3595036,"hostname":"Server1","class":"baileys","node":{"passive":false,"userAgent":{"platform":"WEB","appVersion":{"primary":2,"secondary":3000,"tertiary":1033105955},"mcc":"000","mnc":"000","osVersion":"0.1","device":"Desktop","osBuildNumber":"0.1","releaseChannel":"RELEASE","localeLanguageIso6391":"en","localeCountryIso31661Alpha2":"US"},"webInfo":{"webSubPlatform":"WEB_BROWSER"},"connectType":"WIFI_UNKNOWN","connectReason":"USER_ACTIVATED","devicePairingData":{"eRegid":"AAAACQ==","eKeytype":"BQ==","eIdent":"rymBLwbQaJZLSydbcLn3e26sRqau1zl2k3DhqInvVkI=","eSkeyId":"AAAB","eSkeyVal":"lSGFZOxAbRAGbz+VSZ0z7RnQRqqLkIqdSSq6PU8LgDg=","eSkeySig":"TRt4TPmE4Y0RTIaFQHs78jQuPGr3K3CEph0FAA9H+OOJASelAC7YHWSrkTobWnGFJx6lByinTuze+02Hem7lCw==","buildHash":"OZiT8NQkvH56rL7BSxKJGw==","deviceProps":"ChBKYW5lcmkgV1BQIFBhbmVsEgYIChAPGAcYASAAKhcYgFAgATAAOAFAAUgBUAFYAWABcAF4AA=="},"pull":false},"msg":"not logged in, attempting registration..."}
+[default] QR code atualizado
+[default] Instance status persisted: qr qr
+[default] QR code atualizado
+[default] Instance status persisted: qr qr
+[default] QR code atualizado
+[default] Instance status persisted: qr qr
+[default] QR code atualizado
+[default] Instance status persisted: qr qr
+[default] QR code atualizado
+[default] Instance status persisted: qr qr
+[default] 2026-02-14T19:07:35.322Z GET /health
+[default] QR code atualizado
+[default] Instance status persisted: qr qr

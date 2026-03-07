@@ -1,0 +1,1203 @@
+  [2mconsole.log[22m
+    
+    🔍 Testing #debug# command on Instance 3013 - inst_6992ed0c735f0
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command-enhanced.test.js[2m:142:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    📤 Sending #debug# message to port 3013...
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command-enhanced.test.js[2m:145:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    📨 Send response: {
+      "ok": true,
+      "instanceId": "inst_6992ed0c735f0",
+      "to": "5585920000859@s.whatsapp.net",
+      "result": {
+        "key": {
+          "remoteJid": "5585920000859@s.whatsapp.net",
+          "fromMe": true,
+          "id": "3EB0B3661D9D19850A6035"
+        },
+        "message": {
+          "extendedTextMessage": {
+            "text": "#debug#"
+          }
+        },
+        "messageTimestamp": "1772393421",
+        "status": "PENDING"
+      }
+    }
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command-enhanced.test.js[2m:150:21)[22m[2m[22m
+
+  [2mconsole.log[22m
+    
+    ⏳ Checking logs for debug command handling...
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command-enhanced.test.js[2m:159:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    
+    📋 Log Analysis:
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command-enhanced.test.js[2m:162:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+      - Debug command detected: false
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command-enhanced.test.js[2m:163:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+      - Debug info sent: false
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command-enhanced.test.js[2m:164:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    
+    📝 Verifying debug response format...
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command-enhanced.test.js[2m:194:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    ✅ Debug response format is correct
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command-enhanced.test.js[2m:220:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    
+    🔍 Verifying all required fields are included...
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command-enhanced.test.js[2m:224:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    ✅ All required fields are present in debug command
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command-enhanced.test.js[2m:247:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    
+    ✂️  Verifying prompt truncation at 200 chars...
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command-enhanced.test.js[2m:251:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    ✅ Prompt truncation works correctly (200 chars + ...
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command-enhanced.test.js[2m:267:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    
+    🔍 Testing on Instance 3013 - inst_6992ed0c735f0...
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command-enhanced.test.js[2m:275:21)[22m[2m[22m
+
+  [2mconsole.log[22m
+    ✅ Instance 3013 - inst_6992ed0c735f0: Debug command works
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command-enhanced.test.js[2m:282:25)[22m[2m[22m
+
+  [2mconsole.log[22m
+    
+    🔍 Testing on Instance 3011 - inst_6992ec9e78d1c...
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command-enhanced.test.js[2m:275:21)[22m[2m[22m
+
+  [2mconsole.log[22m
+    ✅ Instance 3011 - inst_6992ec9e78d1c: Debug command works
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command-enhanced.test.js[2m:282:25)[22m[2m[22m
+
+[0m[7m[1m[31m FAIL [39m[22m[27m[0m [2mintegration/[22m[1mdebug-command-enhanced.test.js[22m ([0m[1m[41m22.871 s[49m[22m[0m)
+  Debug Command #debug# Enhanced
+    [31m✕[39m [2mShould respond with debug info and NOT send to AI (18223 ms)[22m
+    [32m✓[39m [2mDebug response should have correct format (3 ms)[22m
+    [32m✓[39m [2mDebug command should include all required fields (4 ms)[22m
+    [32m✓[39m [2mSystem prompt should be truncated at 200 chars (3 ms)[22m
+  Debug Command Multiple Instances
+    [32m✓[39m [2mShould work on different instances with different configs (4427 ms)[22m
+
+[1m[31m  [1m● [22m[1mDebug Command #debug# Enhanced › Should respond with debug info and NOT send to AI[39m[22m
+
+    [2mexpect([22m[31mreceived[39m[2m).[22mtoBeDefined[2m()[22m
+
+    Received: [31mundefined[39m
+[2m[22m
+[2m      165 |         [22m
+[2m      166 |         // CRITICAL: Debug command should be detected[22m
+[2m    > 167 |         expect(logResult.debugDetection).toBeDefined();[22m
+[2m          |                                          ^[22m
+[2m      168 |         expect(logResult.debugDetection).toContain('[DEBUG]');[22m
+[2m      169 |         [22m
+[2m      170 |         // CRITICAL: Message should NOT be processed by AI (handled before AI)[22m
+[2m[22m
+[2m      [2mat Object.toBeDefined ([22m[2m[0m[36mintegration/debug-command-enhanced.test.js[39m[0m[2m:167:42)[22m[2m[22m
+
+  [2mconsole.log[22m
+    📤 Sending #debug# message to port 3011...
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command.test.js[2m:145:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    📨 Response: {
+      "ok": true,
+      "instanceId": "inst_6992ec9e78d1c",
+      "to": "5585999999000@s.whatsapp.net",
+      "result": {
+        "key": {
+          "remoteJid": "5585999999000@s.whatsapp.net",
+          "fromMe": true,
+          "id": "3EB0D247652C9B7DEE6868"
+        },
+        "message": {
+          "extendedTextMessage": {
+            "text": "#debug#"
+          }
+        },
+        "messageTimestamp": "1772393443",
+        "status": "PENDING"
+      }
+    }
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command.test.js[2m:150:21)[22m[2m[22m
+
+  [2mconsole.log[22m
+    
+    ⏳ Waiting for AI response...
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command.test.js[2m:161:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    ⚠️  AI response not detected within timeout (this may be expected)
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/debug-command.test.js[2m:177:21)[22m[2m[22m
+
+[0m[7m[1m[32m PASS [39m[22m[27m[0m [2mintegration/[22m[1mdebug-command.test.js[22m ([0m[1m[41m29.005 s[49m[22m[0m)
+  Debug Command Integration Tests
+    [32m✓[39m [2mshould send #debug# message to 5585999999000 via port 3011 (28958 ms)[22m
+    [32m✓[39m [2mshould return valid instance status (4 ms)[22m
+    [32m✓[39m [2mshould return valid health check (1 ms)[22m
+
+  [2mconsole.log[22m
+    Text Message Response: {
+      "ok": true,
+      "instanceId": "inst_6992ec9e78d1c",
+      "to": "558586030781@s.whatsapp.net",
+      "result": {
+        "key": {
+          "remoteJid": "558586030781@s.whatsapp.net",
+          "fromMe": true,
+          "id": "3EB049F5EE44FD54F84BA0"
+        },
+        "message": {
+          "extendedTextMessage": {
+            "text": "Test message from automated test suite"
+          }
+        },
+        "messageTimestamp": "1772393473",
+        "status": "PENDING"
+      }
+    }
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/api/messaging.test.js[2m:40:15)[22m[2m[22m
+
+  [2mconsole.log[22m
+    Image Message Response: {
+      "ok": true,
+      "instanceId": "inst_6992ec9e78d1c",
+      "to": "558586030781@s.whatsapp.net",
+      "type": "image",
+      "result": {
+        "key": {
+          "remoteJid": "558586030781@s.whatsapp.net",
+          "fromMe": true,
+          "id": "3EB07DBBC7D5F4BDC43DFB"
+        },
+        "message": {
+          "imageMessage": {
+            "url": "https://mmg.whatsapp.net/o1/v/t24/f2/m235/AQP31fJaIUsXM5Azv5QDm3y90CqLwRitpGxR5Ah3ssbNQMQVz9ENZR1OGG6UtPlz3vvO_uANbGLkCDW_sixQ0YVxaj22QSil85Hv3Jzomw?ccb=9-4&oh=01_Q5Aa3wFwdnZpIxMx4gyzIhyHSDaEc_yJn-p5r26iyLZGdGwrpQ&oe=69CC1986&_nc_sid=e6ed6c&mms3=true",
+            "mimetype": "image/jpeg",
+            "caption": "Test image from automated test suite",
+            "fileSha256": "wCjXqhXoUbDu+zFjihhWSYojf68YKQUIMtO5sZ+at18=",
+            "fileLength": "35588",
+            "height": 178,
+            "width": 239,
+            "mediaKey": "nW5sau0wFejgd2U8fLMquC9GDVYbp93cS1Aniros2OM=",
+            "fileEncSha256": "+5QkWxv0n+bTHXT5qzzSIeDJDlRWTKszdnCVgg1Bx7o=",
+            "directPath": "/o1/v/t24/f2/m235/AQP31fJaIUsXM5Azv5QDm3y90CqLwRitpGxR5Ah3ssbNQMQVz9ENZR1OGG6UtPlz3vvO_uANbGLkCDW_sixQ0YVxaj22QSil85Hv3Jzomw?ccb=9-4&oh=01_Q5Aa3wFwdnZpIxMx4gyzIhyHSDaEc_yJn-p5r26iyLZGdGwrpQ&oe=69CC1986&_nc_sid=e6ed6c",
+            "mediaKeyTimestamp": "1772393474",
+            "jpegThumbnail": "/9j/2wBDABALDA4MChAODQ4SERATGCgaGBYWGDEjJR0oOjM9PDkzODdASFxOQERXRTc4UG1RV19iZ2hnPk1xeXBkeFxlZ2P/2wBDARESEhgVGC8aGi9jQjhCY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2P/wAARCAAYACADASIAAhEBAxEB/8QAGQAAAgMBAAAAAAAAAAAAAAAAAAUBAwQC/8QAKRAAAgEDAwEHBQAAAAAAAAAAAQIDABESBCExIgUTFEFhcZEjMkJRof/EABYBAQEBAAAAAAAAAAAAAAAAAAECAP/EABYRAQEBAAAAAAAAAAAAAAAAAAABEf/aAAwDAQACEQMRAD8A5jAChSoJI2FqnAD8FufSo008kDdEMRBUdTMSfYUxgkhfTmaeLHBgrMpvueKjAwd1n0mIHfjHeq3gSJrmJUYi98adtqYfGLp0hWNDYhwd3vuPmlfbUjjUpKjh9K1grqPsbzUjy9KGKx2Ugsyu5FuGNbCh8JDBHIyCMl2AJN2Pr+gBb5ooq6FsbPlDm7fTPN+RyP7UOzkvdr5m5970UVLP/9k="
+          }
+        },
+        "messageTimestamp": "1772393474",
+        "status": "PENDING"
+      }
+    }
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/api/messaging.test.js[2m:73:15)[22m[2m[22m
+
+  [2mconsole.log[22m
+    Video Message Response: {
+      "ok": true,
+      "instanceId": "inst_6992ec9e78d1c",
+      "to": "558586030781@s.whatsapp.net",
+      "type": "video",
+      "result": {
+        "key": {
+          "remoteJid": "558586030781@s.whatsapp.net",
+          "fromMe": true,
+          "id": "3EB05B5D6D01C2D0A1B8A8"
+        },
+        "message": {
+          "videoMessage": {
+            "url": "https://mmg.whatsapp.net/v/t62.7161-24/537364804_1615323709588262_8618834045819863391_n.enc?ccb=11-4&oh=01_Q5Aa3wETRfDNttoAN9Rk4Lglg62-zhDIEcPSuso9nV4RFxoMSA&oe=69CC1E2D&_nc_sid=5e03e0&mms3=true",
+            "mimetype": "video/mp4",
+            "fileSha256": "O7k4+3AEnj5F9TOzfMrpla6WUW4EwvNbDBFC5HsqOcE=",
+            "fileLength": "788493",
+            "mediaKey": "QnoTFaMrH2H977Qdo6U5UPhmAs7Z0hRyJrZ//A+mdsc=",
+            "caption": "Test video from automated test suite",
+            "fileEncSha256": "q+JnVGI9Pc1oVUWwXatwa7+5n6BTsiAWUgzBuSoLqbE=",
+            "directPath": "/v/t62.7161-24/537364804_1615323709588262_8618834045819863391_n.enc?ccb=11-4&oh=01_Q5Aa3wETRfDNttoAN9Rk4Lglg62-zhDIEcPSuso9nV4RFxoMSA&oe=69CC1E2D&_nc_sid=5e03e0",
+            "mediaKeyTimestamp": "1772393474",
+            "jpegThumbnail": "/9j//gARTGF2YzU4LjEzNC4xMDAA/9sAQwAIBAQEBAQFBQUFBQUGBgYGBgYGBgYGBgYGBwcHCAgIBwcHBgYHBwgICAgJCQkICAgICQkKCgoMDAsLDg4OEREU/8QAggAAAwEBAAAAAAAAAAAAAAAABgMEBQIBAQEBAAAAAAAAAAAAAAAAAAEDAhAAAgECBAQDAw0BAAAAAAAAAgEDBBEhABIFEzEGIkFRMiNzgnKhsYGycVIzNBVCB8FhEQABAwMEAAcBAAAAAAAAAAABEQMCEgAxEwRBUbGCczNhslIh/8AAEQgAEgAgAwEiAAIRAAMRAP/aAAwDAQACEQMRAD8AwqeDhmvxF3Wu3YOVsOd7Wvkn6N2fp3qEZturAroaxDLUhVUsgKNwxoPZHFNe5Jle4isF45zNtLa6eh49QylmcxoYo5BYsBVlqZBhI78kKS/7lnTvVcHTW9/u8MI7ijpqqIqUTEZ4kTSci1J997IUlZjflmZ2czSYmE5EVluJU0+CpgZsc2kWdObjrc6gCYA1GMT2mDd3UnRo7LslXNHVzVap0bjMQEFJpJJsXd3SHUmk/ueQeXc+E9RgGDLH+THwVrXXz5OYP7M2zeqYKHdqGWKlqDkpqmbjcaSnhm1CLjEQWEV7se27vkC36goqeqqVQ1UtVShJaGoIHEzFq4o0x7TSwNLxTtdZ0IsqNMGKLUBUhP6/vxm4PNQqVvB46N2wGbqpEyJ+0m5t+A5TO2KZJtPVa6wdm3dX8n5ZbT/qpfeTfZyqo9D94vpecNe557TxfJEWtYvuZMsfU/N+f15jqSJwitTszxV3Z2eay9YfFmOo/KD5f+5ttsuenP6mzm//2Q=="
+          }
+        },
+        "messageTimestamp": "1772393474",
+        "status": "PENDING"
+      }
+    }
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/api/messaging.test.js[2m:109:15)[22m[2m[22m
+
+  [2mconsole.log[22m
+    Image Base64 Response: {
+      "ok": true,
+      "instanceId": "inst_6992ec9e78d1c",
+      "to": "558586030781@s.whatsapp.net",
+      "type": "image",
+      "result": {
+        "key": {
+          "remoteJid": "558586030781@s.whatsapp.net",
+          "fromMe": true,
+          "id": "3EB07A98D6964B50F56BC6"
+        },
+        "message": {
+          "imageMessage": {
+            "url": "https://mmg.whatsapp.net/o1/v/t24/f2/m231/AQOugq0R-Rk-mDqBW3-snYA--Q2eaz0RJNaJIjRXyrNNCuDhSqiH2gty1DmqnogHrykg0LOpXcrQDLLFkZvKIq8GB6kYlHzVzbIvjELmrQ?ccb=9-4&oh=01_Q5Aa3wGASUCAuMvuaqjahG_8HmpGKqzyX18D9iZuAxojz7g9KA&oe=69CBF201&_nc_sid=e6ed6c&mms3=true",
+            "mimetype": "image/jpeg",
+            "caption": "Test image (base64) from automated test suite",
+            "fileSha256": "vAnCWQ0lAsj/rxo8CaqJ3yIuA9GGqNqgx/zmMh+26Sg=",
+            "fileLength": "70",
+            "mediaKey": "T6D8uHPCfevs1CI2S7GY+U2wbGd/JyOdfJvFLmSrFgM=",
+            "fileEncSha256": "JAWeu0JvPQqQkxipr4wndTkRcELmOm1LCNIoWMBYxXw=",
+            "directPath": "/o1/v/t24/f2/m231/AQOugq0R-Rk-mDqBW3-snYA--Q2eaz0RJNaJIjRXyrNNCuDhSqiH2gty1DmqnogHrykg0LOpXcrQDLLFkZvKIq8GB6kYlHzVzbIvjELmrQ?ccb=9-4&oh=01_Q5Aa3wGASUCAuMvuaqjahG_8HmpGKqzyX18D9iZuAxojz7g9KA&oe=69CBF201&_nc_sid=e6ed6c",
+            "mediaKeyTimestamp": "1772393475"
+          }
+        },
+        "messageTimestamp": "1772393475",
+        "status": "PENDING"
+      }
+    }
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/api/messaging.test.js[2m:147:15)[22m[2m[22m
+
+  [2mconsole.log[22m
+    ✅ Image sent successfully via base64!
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/api/messaging.test.js[2m:155:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    Status Response: {
+      "instanceId": "inst_6992ec9e78d1c",
+      "connectionStatus": "connected",
+      "whatsappConnected": true,
+      "hasQR": false,
+      "lastConnectionError": null,
+      "connectionSince": null,
+      "whatsappVersion": null,
+      "baileysVersion": null,
+      "browser": null,
+      "userAgent": null
+    }
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/api/messaging.test.js[2m:176:15)[22m[2m[22m
+
+  [2mconsole.log[22m
+    Health Response: {
+      "ok": true,
+      "instanceId": "inst_6992ec9e78d1c",
+      "status": "connected",
+      "whatsappConnected": true,
+      "timestamp": "2026-03-01T19:31:15.050Z",
+      "uptime": 3349.327843153,
+      "memory": {
+        "rss": "186.98 MB",
+        "heapTotal": "88.77 MB",
+        "heapUsed": "80.48 MB",
+        "external": "4.33 MB"
+      },
+      "cpu": {
+        "user": 12.734111,
+        "system": 3.184659
+      },
+      "messageQueue": {
+        "size": 0
+      },
+      "pendingMultiInputs": {
+        "count": 0
+      },
+      "browser": null,
+      "userAgent": null,
+      "whatsappVersion": null,
+      "baileysVersion": null,
+      "connectionSince": null
+    }
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/api/messaging.test.js[2m:190:15)[22m[2m[22m
+
+[0m[7m[1m[32m PASS [39m[22m[27m[0m [2mintegration/api/[22m[1mmessaging.test.js[22m
+  WhatsApp Messaging API - Instance 3011
+    POST /send-message - Text Message
+      [32m✓[39m [2mshould send text message to 558586030781 (2684 ms)[22m
+    POST /send-message - Image Message (URL)
+      [32m✓[39m [2mshould send image message via URL to 558586030781 (632 ms)[22m
+    POST /send-message - Video Message (URL)
+      [32m✓[39m [2mshould send video message via URL to 558586030781 (394 ms)[22m
+    POST /send-message - Image (Base64)
+      [32m✓[39m [2mshould send image message via base64 to 558586030781 (328 ms)[22m
+    GET /status - Instance Status
+      [32m✓[39m [2mshould return instance connection status (6 ms)[22m
+    GET /health - Instance Health
+      [32m✓[39m [2mshould return instance health (2 ms)[22m
+
+[0m[7m[1m[32m PASS [39m[22m[27m[0m [2mhelpers/[22m[1mmockData.test.js[22m
+  Mock Data Helpers
+    mockMessage
+      [32m✓[39m [2mshould generate message with required fields (3 ms)[22m
+      [32m✓[39m [2mshould allow overriding defaults[22m
+    mockTextMessage
+      [32m✓[39m [2mshould create text message with correct format (1 ms)[22m
+    mockImageMessage
+      [32m✓[39m [2mshould create image message with imageMessage object (1 ms)[22m
+    mockContact
+      [32m✓[39m [2mshould generate contact with required fields (1 ms)[22m
+    mockInstance
+      [32m✓[39m [2mshould generate instance with valid port range (2 ms)[22m
+      [32m✓[39m [2mshould allow custom instance_id (1 ms)[22m
+    mockScheduledMessage
+      [32m✓[39m [2mshould generate scheduled message with future timestamp (1 ms)[22m
+    mockUser
+      [32m✓[39m [2mshould generate user with valid role (2 ms)[22m
+    mockAIConfig
+      [32m✓[39m [2mshould generate AI config with valid provider (1 ms)[22m
+    mockHealthResponse
+      [32m✓[39m [2mshould generate valid health response[22m
+    mockStatusResponse
+      [32m✓[39m [2mshould generate valid status response (1 ms)[22m
+    mockSendMessageResponse
+      [32m✓[39m [2mshould generate valid send message response[22m
+    generateValidPhoneNumber
+      [32m✓[39m [2mshould generate Brazilian phone number format[22m
+      [32m✓[39m [2mshould respect custom country code[22m
+    generateValidJID
+      [32m✓[39m [2mshould generate valid WhatsApp JID[22m
+    generateGroupJID
+      [32m✓[39m [2mshould generate group JID format[22m
+    generateTestDatabasePath
+      [32m✓[39m [2mshould generate test db path[22m
+
+  [2mconsole.log[22m
+    [AI Config] Instance: inst_6992ec9e78d1c | Instance settings found: 4 | Global keys: 4
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:245:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from instance: You are a helpful assistant for instance 1. Always
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:246:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from global: GLOBAL PROMPT - should NOT be used
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:247:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Multi-input delay raw value:  | Type: string
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:283:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final system_prompt: You are a helpful assistant for instance 1. Always
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:300:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final gemini_instruction: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:301:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    ✅ Instance uses its own prompt (not global)
+[2m[22m
+[2m      [2mat Object.log ([22m[2munit/ai-prompt-isolation.test.js[2m:104:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Instance: inst_6992ec9e78d1c | Instance settings found: 4 | Global keys: 4
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:245:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from instance: You are a helpful assistant for instance 1. Always
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:246:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from global: GLOBAL PROMPT - should NOT be used
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:247:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Multi-input delay raw value:  | Type: string
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:283:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final system_prompt: You are a helpful assistant for instance 1. Always
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:300:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final gemini_instruction: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:301:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Instance: inst_6992ed0c735f0 | Instance settings found: 4 | Global keys: 4
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:245:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from instance: You are a formal assistant for instance 2. Use for
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:246:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from global: GLOBAL PROMPT - should NOT be used
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:247:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Multi-input delay raw value:  | Type: string
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:283:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final system_prompt: You are a formal assistant for instance 2. Use for
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:300:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final gemini_instruction: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:301:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    ✅ Different instances have different prompts
+[2m[22m
+[2m      [2mat Object.log ([22m[2munit/ai-prompt-isolation.test.js[2m:121:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Instance: inst_6992eddf5c2a7 | Instance settings found: 4 | Global keys: 4
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:245:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from instance: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:246:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from global: GLOBAL PROMPT - should NOT be used
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:247:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Multi-input delay raw value:  | Type: string
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:283:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final system_prompt: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:300:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final gemini_instruction: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:301:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    ✅ Warning logged for missing ai_system_prompt
+[2m[22m
+[2m      [2mat Object.log ([22m[2munit/ai-prompt-isolation.test.js[2m:140:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    ✅ Handles missing db gracefully
+[2m[22m
+[2m      [2mat Object.log ([22m[2munit/ai-prompt-isolation.test.js[2m:153:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Instance: inst_json_test | Instance settings found: 2 | Global keys: 0
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:245:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from instance: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:246:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from global: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:247:13)[22m[2m[22m
+
+  [2m[31mconsole.error[39m[22m
+[31m    [AI Config] ❌ ERROR: Instance inst_json_test has NO ai_system_prompt configured![39m
+[2m[22m
+[2m      254 |     // ================================================================[22m
+[2m      255 |     if (!settings.ai_system_prompt || settings.ai_system_prompt.trim() === '') {[22m
+[2m    > 256 |         console.error(`[AI Config] ❌ ERROR: Instance ${instanceId} has NO ai_system_prompt configured!`);[22m
+[2m          |                 ^[22m
+[2m      257 |         console.error('[AI Config] Each instance MUST have its own ai_system_prompt in the database.');[22m
+[2m      258 |     }[22m
+[2m      259 |     [22m
+[2m[22m
+[2m      [2mat error ([22m[2m../src/whatsapp-server/ai/index.js[2m:256:17)[22m[2m[22m
+[2m      [2mat Object.<anonymous> ([22m[2munit/ai-prompt-isolation.test.js[2m:168:24)[22m[2m[22m
+
+  [2m[31mconsole.error[39m[22m
+[31m    [AI Config] Each instance MUST have its own ai_system_prompt in the database.[39m
+[2m[22m
+[2m      255 |     if (!settings.ai_system_prompt || settings.ai_system_prompt.trim() === '') {[22m
+[2m      256 |         console.error(`[AI Config] ❌ ERROR: Instance ${instanceId} has NO ai_system_prompt configured!`);[22m
+[2m    > 257 |         console.error('[AI Config] Each instance MUST have its own ai_system_prompt in the database.');[22m
+[2m          |                 ^[22m
+[2m      258 |     }[22m
+[2m      259 |     [22m
+[2m      260 |     // ================================================================[22m
+[2m[22m
+[2m      [2mat error ([22m[2m../src/whatsapp-server/ai/index.js[2m:257:17)[22m[2m[22m
+[2m      [2mat Object.<anonymous> ([22m[2munit/ai-prompt-isolation.test.js[2m:168:24)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Parsed ai_config JSON successfully
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:269:21)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Multi-input delay raw value:  | Type: string
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:283:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final system_prompt: Prompt from JSON
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:300:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final gemini_instruction: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:301:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    ✅ Uses ai_config JSON as fallback
+[2m[22m
+[2m      [2mat Object.log ([22m[2munit/ai-prompt-isolation.test.js[2m:173:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Instance: inst_strict_test | Instance settings found: 1 | Global keys: 4
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:245:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from instance: Instance-only prompt
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:246:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from global: GLOBAL PROMPT - should NOT be used
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:247:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Multi-input delay raw value:  | Type: string
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:283:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final system_prompt: Instance-only prompt
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:300:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final gemini_instruction: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:301:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    ✅ Strict isolation - no global inheritance
+[2m[22m
+[2m      [2mat Object.log ([22m[2munit/ai-prompt-isolation.test.js[2m:193:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Instance: inst_test | Instance settings found: 23 | Global keys: 0
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:245:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from instance: Test prompt for persistence
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:246:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from global: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:247:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Multi-input delay raw value: 0 | Type: string
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:283:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final system_prompt: Test prompt for persistence
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:300:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final gemini_instruction: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:301:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Instance: inst_test | Instance settings found: 23 | Global keys: 0
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:245:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from instance: Test prompt for persistence
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:246:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from global: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:247:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Multi-input delay raw value: 0 | Type: string
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:283:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final system_prompt: Test prompt for persistence
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:300:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final gemini_instruction: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:301:13)[22m[2m[22m
+
+[0m[7m[1m[32m PASS [39m[22m[27m[0m [2munit/[22m[1mai-prompt-isolation.test.js[22m
+  AI Prompt Isolation
+    [32m✓[39m [2mInstance should use ONLY its own ai_system_prompt (no global inheritance) (12 ms)[22m
+    [32m✓[39m [2mDifferent instances should have different prompts (isolation) (5 ms)[22m
+    [32m✓[39m [2mShould log warning when instance has no ai_system_prompt (3 ms)[22m
+    [32m✓[39m [2mShould handle missing db gracefully (1 ms)[22m
+    [32m✓[39m [2mShould use ai_config JSON as fallback when simple fields are empty (6 ms)[22m
+    [32m✓[39m [2mShould NOT inherit any global settings (strict isolation) (2 ms)[22m
+  AI Config Persistence
+    [32m✓[39m [2mpersistAIConfig should save settings for specific instance (5 ms)[22m
+
+  [2mconsole.log[22m
+    
+    🔒 Testing prompt isolation between multiple instances...
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/prompt-leak-regression.test.js[2m:66:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Instance: inst_6992ec9e78d1c | Instance settings found: 4 | Global keys: 2
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:245:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from instance: Prompt for instance 1 - specific and unique
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:246:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from global: GLOBAL_SHOULD_NOT_LEAK
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:247:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Multi-input delay raw value:  | Type: string
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:283:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final system_prompt: Prompt for instance 1 - specific and unique
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:300:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final gemini_instruction: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:301:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Instance: inst_6992ed0c735f0 | Instance settings found: 4 | Global keys: 2
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:245:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from instance: Prompt for instance 2 - different content
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:246:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from global: GLOBAL_SHOULD_NOT_LEAK
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:247:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Multi-input delay raw value:  | Type: string
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:283:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final system_prompt: Prompt for instance 2 - different content
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:300:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final gemini_instruction: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:301:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Instance: inst_6992eddf5c2a7 | Instance settings found: 4 | Global keys: 2
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:245:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from instance: Prompt for instance 3 - completely different
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:246:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from global: GLOBAL_SHOULD_NOT_LEAK
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:247:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Multi-input delay raw value:  | Type: string
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:283:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final system_prompt: Prompt for instance 3 - completely different
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:300:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final gemini_instruction: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:301:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+      ✅ inst_6992ec9e78d1c: Prompt is isolated
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/prompt-leak-regression.test.js[2m:86:21)[22m[2m[22m
+
+  [2mconsole.log[22m
+      ✅ inst_6992ed0c735f0: Prompt is isolated
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/prompt-leak-regression.test.js[2m:86:21)[22m[2m[22m
+
+  [2mconsole.log[22m
+      ✅ inst_6992eddf5c2a7: Prompt is isolated
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/prompt-leak-regression.test.js[2m:86:21)[22m[2m[22m
+
+  [2mconsole.log[22m
+    ✅ No prompt leakage between instances
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/prompt-leak-regression.test.js[2m:94:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    
+    🌐 Testing that global settings are NOT inherited...
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/prompt-leak-regression.test.js[2m:98:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Instance: inst_no_global_inherit | Instance settings found: 2 | Global keys: 2
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:245:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from instance: MY_OWN_PROMPT
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:246:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from global: GLOBAL_SHOULD_NOT_APPEAR
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:247:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Multi-input delay raw value:  | Type: string
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:283:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final system_prompt: MY_OWN_PROMPT
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:300:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final gemini_instruction: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:301:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    ✅ Global settings are NOT inherited
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/prompt-leak-regression.test.js[2m:130:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    
+    ⚡ Testing concurrent config loads maintain isolation...
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/prompt-leak-regression.test.js[2m:134:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Instance: inst_6992ec9e78d1c | Instance settings found: 4 | Global keys: 2
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:245:13)[22m[2m[22m
+[2m          at async Promise.all (index 0)[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from instance: Prompt for instance 1 - specific and unique
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:246:13)[22m[2m[22m
+[2m          at async Promise.all (index 0)[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from global: GLOBAL_SHOULD_NOT_LEAK
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:247:13)[22m[2m[22m
+[2m          at async Promise.all (index 0)[22m
+
+  [2mconsole.log[22m
+    [AI Config] Multi-input delay raw value:  | Type: string
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:283:13)[22m[2m[22m
+[2m          at async Promise.all (index 0)[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final system_prompt: Prompt for instance 1 - specific and unique
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:300:13)[22m[2m[22m
+[2m          at async Promise.all (index 0)[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final gemini_instruction: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:301:13)[22m[2m[22m
+[2m          at async Promise.all (index 0)[22m
+
+  [2mconsole.log[22m
+    [AI Config] Instance: inst_6992ed0c735f0 | Instance settings found: 4 | Global keys: 2
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:245:13)[22m[2m[22m
+[2m          at async Promise.all (index 1)[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from instance: Prompt for instance 2 - different content
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:246:13)[22m[2m[22m
+[2m          at async Promise.all (index 1)[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from global: GLOBAL_SHOULD_NOT_LEAK
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:247:13)[22m[2m[22m
+[2m          at async Promise.all (index 1)[22m
+
+  [2mconsole.log[22m
+    [AI Config] Multi-input delay raw value:  | Type: string
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:283:13)[22m[2m[22m
+[2m          at async Promise.all (index 1)[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final system_prompt: Prompt for instance 2 - different content
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:300:13)[22m[2m[22m
+[2m          at async Promise.all (index 1)[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final gemini_instruction: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:301:13)[22m[2m[22m
+[2m          at async Promise.all (index 1)[22m
+
+  [2mconsole.log[22m
+    [AI Config] Instance: inst_6992eddf5c2a7 | Instance settings found: 4 | Global keys: 2
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:245:13)[22m[2m[22m
+[2m          at async Promise.all (index 2)[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from instance: Prompt for instance 3 - completely different
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:246:13)[22m[2m[22m
+[2m          at async Promise.all (index 2)[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from global: GLOBAL_SHOULD_NOT_LEAK
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:247:13)[22m[2m[22m
+[2m          at async Promise.all (index 2)[22m
+
+  [2mconsole.log[22m
+    [AI Config] Multi-input delay raw value:  | Type: string
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:283:13)[22m[2m[22m
+[2m          at async Promise.all (index 2)[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final system_prompt: Prompt for instance 3 - completely different
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:300:13)[22m[2m[22m
+[2m          at async Promise.all (index 2)[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final gemini_instruction: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:301:13)[22m[2m[22m
+[2m          at async Promise.all (index 2)[22m
+
+  [2mconsole.log[22m
+    ✅ Concurrent loads maintain isolation
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/prompt-leak-regression.test.js[2m:156:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    
+    ⚠️  Testing warning logs for missing prompts...
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/prompt-leak-regression.test.js[2m:160:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Instance: inst_no_prompt | Instance settings found: 3 | Global keys: 3
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:245:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from instance: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:246:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from global: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:247:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Multi-input delay raw value:  | Type: string
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:283:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final system_prompt: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:300:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final gemini_instruction: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:301:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    ✅ Warning logs correctly for missing prompts
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/prompt-leak-regression.test.js[2m:184:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    
+    📦 Testing empty database returns defaults...
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/prompt-leak-regression.test.js[2m:188:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Instance: any-instance | Instance settings found: 0 | Global keys: 0
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:245:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from instance: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:246:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from global: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:247:13)[22m[2m[22m
+
+  [2m[31mconsole.error[39m[22m
+[31m    [AI Config] ❌ ERROR: Instance any-instance has NO ai_system_prompt configured![39m
+[2m[22m
+[2m      254 |     // ================================================================[22m
+[2m      255 |     if (!settings.ai_system_prompt || settings.ai_system_prompt.trim() === '') {[22m
+[2m    > 256 |         console.error(`[AI Config] ❌ ERROR: Instance ${instanceId} has NO ai_system_prompt configured!`);[22m
+[2m          |                 ^[22m
+[2m      257 |         console.error('[AI Config] Each instance MUST have its own ai_system_prompt in the database.');[22m
+[2m      258 |     }[22m
+[2m      259 |     [22m
+[2m[22m
+[2m      [2mat error ([22m[2m../src/whatsapp-server/ai/index.js[2m:256:17)[22m[2m[22m
+[2m      [2mat Object.<anonymous> ([22m[2mintegration/prompt-leak-regression.test.js[2m:196:24)[22m[2m[22m
+
+  [2m[31mconsole.error[39m[22m
+[31m    [AI Config] Each instance MUST have its own ai_system_prompt in the database.[39m
+[2m[22m
+[2m      255 |     if (!settings.ai_system_prompt || settings.ai_system_prompt.trim() === '') {[22m
+[2m      256 |         console.error(`[AI Config] ❌ ERROR: Instance ${instanceId} has NO ai_system_prompt configured!`);[22m
+[2m    > 257 |         console.error('[AI Config] Each instance MUST have its own ai_system_prompt in the database.');[22m
+[2m          |                 ^[22m
+[2m      258 |     }[22m
+[2m      259 |     [22m
+[2m      260 |     // ================================================================[22m
+[2m[22m
+[2m      [2mat error ([22m[2m../src/whatsapp-server/ai/index.js[2m:257:17)[22m[2m[22m
+[2m      [2mat Object.<anonymous> ([22m[2mintegration/prompt-leak-regression.test.js[2m:196:24)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Multi-input delay raw value:  | Type: string
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:283:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final system_prompt: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:300:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final gemini_instruction: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:301:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    ✅ Empty database returns correct defaults
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/prompt-leak-regression.test.js[2m:204:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    
+    🔴 Testing that old bug does NOT occur...
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/prompt-leak-regression.test.js[2m:217:17)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Instance: inst_test_bug | Instance settings found: 1 | Global keys: 1
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:245:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from instance: MY_SPECIFIC_PROMPT
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:246:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] System prompt from global: GLOBAL_OVERRIDE_ATTEMPT
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:247:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Multi-input delay raw value:  | Type: string
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:283:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final system_prompt: MY_SPECIFIC_PROMPT
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:300:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    [AI Config] Final gemini_instruction: (empty)
+[2m[22m
+[2m      [2mat log ([22m[2m../src/whatsapp-server/ai/index.js[2m:301:13)[22m[2m[22m
+
+  [2mconsole.log[22m
+    ✅ Old bug is fixed - no global override
+[2m[22m
+[2m      [2mat Object.log ([22m[2mintegration/prompt-leak-regression.test.js[2m:249:17)[22m[2m[22m
+
+[0m[7m[1m[32m PASS [39m[22m[27m[0m [2mintegration/[22m[1mprompt-leak-regression.test.js[22m
+  Prompt Leak Regression Tests
+    [32m✓[39m [2mMultiple instances should NOT leak prompts to each other (9 ms)[22m
+    [32m✓[39m [2mGlobal settings should NOT be inherited by instances (3 ms)[22m
+    [32m✓[39m [2mConcurrent config loads should maintain isolation (7 ms)[22m
+    [32m✓[39m [2mShould log warnings for missing prompts (3 ms)[22m
+    [32m✓[39m [2mEmpty database should return defaults (not global) (5 ms)[22m
+  Regression: Original Bug Behavior
+    [32m✓[39m [2mOLD BUG: Would merge global into instance (should NOT happen now) (3 ms)[22m
+
+[0m[7m[1m[32m PASS [39m[22m[27m[0m [2munit/[22m[1mmessage-splitting-typing.test.js[22m
+  Message Splitting by #
+    splitHashSegments
+      [32m✓[39m [2mshould split message by # into separate segments (1 ms)[22m
+      [32m✓[39m [2mshould handle single segment without #[22m
+      [32m✓[39m [2mshould handle empty string[22m
+      [32m✓[39m [2mshould handle null/undefined input[22m
+      [32m✓[39m [2mshould filter out empty segments[22m
+      [32m✓[39m [2mshould handle multiple consecutive #[22m
+      [32m✓[39m [2mshould trim whitespace from segments[22m
+      [32m✓[39m [2mshould handle # at start and end (1 ms)[22m
+      [32m✓[39m [2mshould handle numbers and special chars in segments[22m
+    parseTextSegments
+      [32m✓[39m [2mshould split message by # into separate segments[22m
+      [32m✓[39m [2mshould return single element array for text without # (1 ms)[22m
+      [32m✓[39m [2mshould return empty array for null/undefined[22m
+      [32m✓[39m [2mshould filter empty segments[22m
+      [32m✓[39m [2mshould handle only # characters (1 ms)[22m
+  Typing Indicator Delay Calculation
+    computeTypingDelayMs
+      [32m✓[39m [2mshould calculate minimum delay for short message[22m
+      [32m✓[39m [2mshould calculate delay based on character count[22m
+      [32m✓[39m [2mshould cap at maximum 10 seconds (1 ms)[22m
+      [32m✓[39m [2mshould return 0 for empty string[22m
+      [32m✓[39m [2mshould return 0 for null/undefined (4 ms)[22m
+      [32m✓[39m [2mshould handle whitespace-only strings (1 ms)[22m
+      [32m✓[39m [2mshould add random variation to delay[22m
+      [32m✓[39m [2mshould calculate delay for medium-length message (1 ms)[22m
+    Typing indicator integration with ai/index.js formula
+      [32m✓[39m [2mshould use 30ms per character formula from ai/index.js[22m
+      [32m✓[39m [2mshould cap at 15000ms in ai/index.js formula[22m
+      [32m✓[39m [2mshould use minimum 1000ms for short messages[22m
+  End-to-End: Message Splitting with Typing Simulation
+    [32m✓[39m [2mshould simulate sending multiple #segmented messages with typing delays (1 ms)[22m
+    [32m✓[39m [2mshould handle long message without # splitting[22m
+    [32m✓[39m [2mshould calculate total time for multi-segment message[22m
+
+[1mTest Suites: [22m[1m[31m1 failed[39m[22m, [1m[32m6 passed[39m[22m, 7 total
+[1mTests:       [22m[1m[31m1 failed[39m[22m, [1m[32m72 passed[39m[22m, 73 total
+[1mSnapshots:   [22m0 total
+[1mTime:[22m        58.167 s, estimated 59 s
+[2mRan all test suites[22m[2m.[22m
+{"numFailedTestSuites":1,"numFailedTests":1,"numPassedTestSuites":6,"numPassedTests":72,"numPendingTestSuites":0,"numPendingTests":0,"numRuntimeErrorTestSuites":0,"numTodoTests":0,"numTotalTestSuites":7,"numTotalTests":73,"openHandles":[],"snapshot":{"added":0,"didUpdate":false,"failure":false,"filesAdded":0,"filesRemoved":0,"filesRemovedList":[],"filesUnmatched":0,"filesUpdated":0,"matched":0,"total":0,"unchecked":0,"uncheckedKeysByFile":[],"unmatched":0,"updated":0},"startTime":1772393418912,"success":false,"testResults":[{"assertionResults":[{"ancestorTitles":["Debug Command #debug# Enhanced"],"duration":18223,"failureDetails":[{"matcherResult":{"message":"\u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBeDefined\u001b[2m()\u001b[22m\n\nReceived: \u001b[31mundefined\u001b[39m","pass":false}}],"failureMessages":["Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBeDefined\u001b[2m()\u001b[22m\n\nReceived: \u001b[31mundefined\u001b[39m\n    at Object.toBeDefined (/var/www/html/admin.janeri.com.br/api/envio/wpp/tests/integration/debug-command-enhanced.test.js:167:42)"],"fullName":"Debug Command #debug# Enhanced Should respond with debug info and NOT send to AI","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"failed","title":"Should respond with debug info and NOT send to AI"},{"ancestorTitles":["Debug Command #debug# Enhanced"],"duration":3,"failureDetails":[],"failureMessages":[],"fullName":"Debug Command #debug# Enhanced Debug response should have correct format","invocations":1,"location":null,"numPassingAsserts":3,"retryReasons":[],"status":"passed","title":"Debug response should have correct format"},{"ancestorTitles":["Debug Command #debug# Enhanced"],"duration":4,"failureDetails":[],"failureMessages":[],"fullName":"Debug Command #debug# Enhanced Debug command should include all required fields","invocations":1,"location":null,"numPassingAsserts":3,"retryReasons":[],"status":"passed","title":"Debug command should include all required fields"},{"ancestorTitles":["Debug Command #debug# Enhanced"],"duration":3,"failureDetails":[],"failureMessages":[],"fullName":"Debug Command #debug# Enhanced System prompt should be truncated at 200 chars","invocations":1,"location":null,"numPassingAsserts":3,"retryReasons":[],"status":"passed","title":"System prompt should be truncated at 200 chars"},{"ancestorTitles":["Debug Command Multiple Instances"],"duration":4427,"failureDetails":[],"failureMessages":[],"fullName":"Debug Command Multiple Instances Should work on different instances with different configs","invocations":1,"location":null,"numPassingAsserts":2,"retryReasons":[],"status":"passed","title":"Should work on different instances with different configs"}],"endTime":1772393441808,"message":"\u001b[1m\u001b[31m  \u001b[1m● \u001b[22m\u001b[1mDebug Command #debug# Enhanced › Should respond with debug info and NOT send to AI\u001b[39m\u001b[22m\n\n    \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBeDefined\u001b[2m()\u001b[22m\n\n    Received: \u001b[31mundefined\u001b[39m\n\u001b[2m\u001b[22m\n\u001b[2m      165 |         \u001b[22m\n\u001b[2m      166 |         // CRITICAL: Debug command should be detected\u001b[22m\n\u001b[2m    > 167 |         expect(logResult.debugDetection).toBeDefined();\u001b[22m\n\u001b[2m          |                                          ^\u001b[22m\n\u001b[2m      168 |         expect(logResult.debugDetection).toContain('[DEBUG]');\u001b[22m\n\u001b[2m      169 |         \u001b[22m\n\u001b[2m      170 |         // CRITICAL: Message should NOT be processed by AI (handled before AI)\u001b[22m\n\u001b[2m\u001b[22m\n\u001b[2m      \u001b[2mat Object.toBeDefined (\u001b[22m\u001b[2m\u001b[0m\u001b[36mintegration/debug-command-enhanced.test.js\u001b[39m\u001b[0m\u001b[2m:167:42)\u001b[22m\u001b[2m\u001b[22m\n","name":"/var/www/html/admin.janeri.com.br/api/envio/wpp/tests/integration/debug-command-enhanced.test.js","startTime":1772393418937,"status":"failed","summary":""},{"assertionResults":[{"ancestorTitles":["Debug Command Integration Tests"],"duration":28958,"failureDetails":[],"failureMessages":[],"fullName":"Debug Command Integration Tests should send #debug# message to 5585999999000 via port 3011","invocations":1,"location":null,"numPassingAsserts":4,"retryReasons":[],"status":"passed","title":"should send #debug# message to 5585999999000 via port 3011"},{"ancestorTitles":["Debug Command Integration Tests"],"duration":4,"failureDetails":[],"failureMessages":[],"fullName":"Debug Command Integration Tests should return valid instance status","invocations":1,"location":null,"numPassingAsserts":2,"retryReasons":[],"status":"passed","title":"should return valid instance status"},{"ancestorTitles":["Debug Command Integration Tests"],"duration":1,"failureDetails":[],"failureMessages":[],"fullName":"Debug Command Integration Tests should return valid health check","invocations":1,"location":null,"numPassingAsserts":3,"retryReasons":[],"status":"passed","title":"should return valid health check"}],"endTime":1772393470819,"message":"","name":"/var/www/html/admin.janeri.com.br/api/envio/wpp/tests/integration/debug-command.test.js","startTime":1772393441814,"status":"passed","summary":""},{"assertionResults":[{"ancestorTitles":["WhatsApp Messaging API - Instance 3011","POST /send-message - Text Message"],"duration":2684,"failureDetails":[],"failureMessages":[],"fullName":"WhatsApp Messaging API - Instance 3011 POST /send-message - Text Message should send text message to 558586030781","invocations":1,"location":null,"numPassingAsserts":4,"retryReasons":[],"status":"passed","title":"should send text message to 558586030781"},{"ancestorTitles":["WhatsApp Messaging API - Instance 3011","POST /send-message - Image Message (URL)"],"duration":632,"failureDetails":[],"failureMessages":[],"fullName":"WhatsApp Messaging API - Instance 3011 POST /send-message - Image Message (URL) should send image message via URL to 558586030781","invocations":1,"location":null,"numPassingAsserts":3,"retryReasons":[],"status":"passed","title":"should send image message via URL to 558586030781"},{"ancestorTitles":["WhatsApp Messaging API - Instance 3011","POST /send-message - Video Message (URL)"],"duration":394,"failureDetails":[],"failureMessages":[],"fullName":"WhatsApp Messaging API - Instance 3011 POST /send-message - Video Message (URL) should send video message via URL to 558586030781","invocations":1,"location":null,"numPassingAsserts":3,"retryReasons":[],"status":"passed","title":"should send video message via URL to 558586030781"},{"ancestorTitles":["WhatsApp Messaging API - Instance 3011","POST /send-message - Image (Base64)"],"duration":328,"failureDetails":[],"failureMessages":[],"fullName":"WhatsApp Messaging API - Instance 3011 POST /send-message - Image (Base64) should send image message via base64 to 558586030781","invocations":1,"location":null,"numPassingAsserts":3,"retryReasons":[],"status":"passed","title":"should send image message via base64 to 558586030781"},{"ancestorTitles":["WhatsApp Messaging API - Instance 3011","GET /status - Instance Status"],"duration":6,"failureDetails":[],"failureMessages":[],"fullName":"WhatsApp Messaging API - Instance 3011 GET /status - Instance Status should return instance connection status","invocations":1,"location":null,"numPassingAsserts":3,"retryReasons":[],"status":"passed","title":"should return instance connection status"},{"ancestorTitles":["WhatsApp Messaging API - Instance 3011","GET /health - Instance Health"],"duration":2,"failureDetails":[],"failureMessages":[],"fullName":"WhatsApp Messaging API - Instance 3011 GET /health - Instance Health should return instance health","invocations":1,"location":null,"numPassingAsserts":3,"retryReasons":[],"status":"passed","title":"should return instance health"}],"endTime":1772393475052,"message":"","name":"/var/www/html/admin.janeri.com.br/api/envio/wpp/tests/integration/api/messaging.test.js","startTime":1772393470823,"status":"passed","summary":""},{"assertionResults":[{"ancestorTitles":["Mock Data Helpers","mockMessage"],"duration":3,"failureDetails":[],"failureMessages":[],"fullName":"Mock Data Helpers mockMessage should generate message with required fields","invocations":1,"location":null,"numPassingAsserts":6,"retryReasons":[],"status":"passed","title":"should generate message with required fields"},{"ancestorTitles":["Mock Data Helpers","mockMessage"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Mock Data Helpers mockMessage should allow overriding defaults","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should allow overriding defaults"},{"ancestorTitles":["Mock Data Helpers","mockTextMessage"],"duration":1,"failureDetails":[],"failureMessages":[],"fullName":"Mock Data Helpers mockTextMessage should create text message with correct format","invocations":1,"location":null,"numPassingAsserts":2,"retryReasons":[],"status":"passed","title":"should create text message with correct format"},{"ancestorTitles":["Mock Data Helpers","mockImageMessage"],"duration":1,"failureDetails":[],"failureMessages":[],"fullName":"Mock Data Helpers mockImageMessage should create image message with imageMessage object","invocations":1,"location":null,"numPassingAsserts":2,"retryReasons":[],"status":"passed","title":"should create image message with imageMessage object"},{"ancestorTitles":["Mock Data Helpers","mockContact"],"duration":1,"failureDetails":[],"failureMessages":[],"fullName":"Mock Data Helpers mockContact should generate contact with required fields","invocations":1,"location":null,"numPassingAsserts":5,"retryReasons":[],"status":"passed","title":"should generate contact with required fields"},{"ancestorTitles":["Mock Data Helpers","mockInstance"],"duration":2,"failureDetails":[],"failureMessages":[],"fullName":"Mock Data Helpers mockInstance should generate instance with valid port range","invocations":1,"location":null,"numPassingAsserts":7,"retryReasons":[],"status":"passed","title":"should generate instance with valid port range"},{"ancestorTitles":["Mock Data Helpers","mockInstance"],"duration":1,"failureDetails":[],"failureMessages":[],"fullName":"Mock Data Helpers mockInstance should allow custom instance_id","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should allow custom instance_id"},{"ancestorTitles":["Mock Data Helpers","mockScheduledMessage"],"duration":1,"failureDetails":[],"failureMessages":[],"fullName":"Mock Data Helpers mockScheduledMessage should generate scheduled message with future timestamp","invocations":1,"location":null,"numPassingAsserts":4,"retryReasons":[],"status":"passed","title":"should generate scheduled message with future timestamp"},{"ancestorTitles":["Mock Data Helpers","mockUser"],"duration":2,"failureDetails":[],"failureMessages":[],"fullName":"Mock Data Helpers mockUser should generate user with valid role","invocations":1,"location":null,"numPassingAsserts":4,"retryReasons":[],"status":"passed","title":"should generate user with valid role"},{"ancestorTitles":["Mock Data Helpers","mockAIConfig"],"duration":1,"failureDetails":[],"failureMessages":[],"fullName":"Mock Data Helpers mockAIConfig should generate AI config with valid provider","invocations":1,"location":null,"numPassingAsserts":5,"retryReasons":[],"status":"passed","title":"should generate AI config with valid provider"},{"ancestorTitles":["Mock Data Helpers","mockHealthResponse"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Mock Data Helpers mockHealthResponse should generate valid health response","invocations":1,"location":null,"numPassingAsserts":3,"retryReasons":[],"status":"passed","title":"should generate valid health response"},{"ancestorTitles":["Mock Data Helpers","mockStatusResponse"],"duration":1,"failureDetails":[],"failureMessages":[],"fullName":"Mock Data Helpers mockStatusResponse should generate valid status response","invocations":1,"location":null,"numPassingAsserts":3,"retryReasons":[],"status":"passed","title":"should generate valid status response"},{"ancestorTitles":["Mock Data Helpers","mockSendMessageResponse"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Mock Data Helpers mockSendMessageResponse should generate valid send message response","invocations":1,"location":null,"numPassingAsserts":4,"retryReasons":[],"status":"passed","title":"should generate valid send message response"},{"ancestorTitles":["Mock Data Helpers","generateValidPhoneNumber"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Mock Data Helpers generateValidPhoneNumber should generate Brazilian phone number format","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should generate Brazilian phone number format"},{"ancestorTitles":["Mock Data Helpers","generateValidPhoneNumber"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Mock Data Helpers generateValidPhoneNumber should respect custom country code","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should respect custom country code"},{"ancestorTitles":["Mock Data Helpers","generateValidJID"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Mock Data Helpers generateValidJID should generate valid WhatsApp JID","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should generate valid WhatsApp JID"},{"ancestorTitles":["Mock Data Helpers","generateGroupJID"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Mock Data Helpers generateGroupJID should generate group JID format","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should generate group JID format"},{"ancestorTitles":["Mock Data Helpers","generateTestDatabasePath"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Mock Data Helpers generateTestDatabasePath should generate test db path","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should generate test db path"}],"endTime":1772393476863,"message":"","name":"/var/www/html/admin.janeri.com.br/api/envio/wpp/tests/helpers/mockData.test.js","startTime":1772393475056,"status":"passed","summary":""},{"assertionResults":[{"ancestorTitles":["AI Prompt Isolation"],"duration":12,"failureDetails":[],"failureMessages":[],"fullName":"AI Prompt Isolation Instance should use ONLY its own ai_system_prompt (no global inheritance)","invocations":1,"location":null,"numPassingAsserts":3,"retryReasons":[],"status":"passed","title":"Instance should use ONLY its own ai_system_prompt (no global inheritance)"},{"ancestorTitles":["AI Prompt Isolation"],"duration":5,"failureDetails":[],"failureMessages":[],"fullName":"AI Prompt Isolation Different instances should have different prompts (isolation)","invocations":1,"location":null,"numPassingAsserts":3,"retryReasons":[],"status":"passed","title":"Different instances should have different prompts (isolation)"},{"ancestorTitles":["AI Prompt Isolation"],"duration":3,"failureDetails":[],"failureMessages":[],"fullName":"AI Prompt Isolation Should log warning when instance has no ai_system_prompt","invocations":1,"location":null,"numPassingAsserts":2,"retryReasons":[],"status":"passed","title":"Should log warning when instance has no ai_system_prompt"},{"ancestorTitles":["AI Prompt Isolation"],"duration":1,"failureDetails":[],"failureMessages":[],"fullName":"AI Prompt Isolation Should handle missing db gracefully","invocations":1,"location":null,"numPassingAsserts":4,"retryReasons":[],"status":"passed","title":"Should handle missing db gracefully"},{"ancestorTitles":["AI Prompt Isolation"],"duration":6,"failureDetails":[],"failureMessages":[],"fullName":"AI Prompt Isolation Should use ai_config JSON as fallback when simple fields are empty","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"Should use ai_config JSON as fallback when simple fields are empty"},{"ancestorTitles":["AI Prompt Isolation"],"duration":2,"failureDetails":[],"failureMessages":[],"fullName":"AI Prompt Isolation Should NOT inherit any global settings (strict isolation)","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"Should NOT inherit any global settings (strict isolation)"},{"ancestorTitles":["AI Config Persistence"],"duration":5,"failureDetails":[],"failureMessages":[],"fullName":"AI Config Persistence persistAIConfig should save settings for specific instance","invocations":1,"location":null,"numPassingAsserts":2,"retryReasons":[],"status":"passed","title":"persistAIConfig should save settings for specific instance"}],"endTime":1772393476947,"message":"","name":"/var/www/html/admin.janeri.com.br/api/envio/wpp/tests/unit/ai-prompt-isolation.test.js","startTime":1772393476870,"status":"passed","summary":""},{"assertionResults":[{"ancestorTitles":["Prompt Leak Regression Tests"],"duration":9,"failureDetails":[],"failureMessages":[],"fullName":"Prompt Leak Regression Tests Multiple instances should NOT leak prompts to each other","invocations":1,"location":null,"numPassingAsserts":4,"retryReasons":[],"status":"passed","title":"Multiple instances should NOT leak prompts to each other"},{"ancestorTitles":["Prompt Leak Regression Tests"],"duration":3,"failureDetails":[],"failureMessages":[],"fullName":"Prompt Leak Regression Tests Global settings should NOT be inherited by instances","invocations":1,"location":null,"numPassingAsserts":3,"retryReasons":[],"status":"passed","title":"Global settings should NOT be inherited by instances"},{"ancestorTitles":["Prompt Leak Regression Tests"],"duration":7,"failureDetails":[],"failureMessages":[],"fullName":"Prompt Leak Regression Tests Concurrent config loads should maintain isolation","invocations":1,"location":null,"numPassingAsserts":3,"retryReasons":[],"status":"passed","title":"Concurrent config loads should maintain isolation"},{"ancestorTitles":["Prompt Leak Regression Tests"],"duration":3,"failureDetails":[],"failureMessages":[],"fullName":"Prompt Leak Regression Tests Should log warnings for missing prompts","invocations":1,"location":null,"numPassingAsserts":2,"retryReasons":[],"status":"passed","title":"Should log warnings for missing prompts"},{"ancestorTitles":["Prompt Leak Regression Tests"],"duration":5,"failureDetails":[],"failureMessages":[],"fullName":"Prompt Leak Regression Tests Empty database should return defaults (not global)","invocations":1,"location":null,"numPassingAsserts":4,"retryReasons":[],"status":"passed","title":"Empty database should return defaults (not global)"},{"ancestorTitles":["Regression: Original Bug Behavior"],"duration":3,"failureDetails":[],"failureMessages":[],"fullName":"Regression: Original Bug Behavior OLD BUG: Would merge global into instance (should NOT happen now)","invocations":1,"location":null,"numPassingAsserts":2,"retryReasons":[],"status":"passed","title":"OLD BUG: Would merge global into instance (should NOT happen now)"}],"endTime":1772393477015,"message":"","name":"/var/www/html/admin.janeri.com.br/api/envio/wpp/tests/integration/prompt-leak-regression.test.js","startTime":1772393476950,"status":"passed","summary":""},{"assertionResults":[{"ancestorTitles":["Message Splitting by #","splitHashSegments"],"duration":1,"failureDetails":[],"failureMessages":[],"fullName":"Message Splitting by # splitHashSegments should split message by # into separate segments","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should split message by # into separate segments"},{"ancestorTitles":["Message Splitting by #","splitHashSegments"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Message Splitting by # splitHashSegments should handle single segment without #","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should handle single segment without #"},{"ancestorTitles":["Message Splitting by #","splitHashSegments"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Message Splitting by # splitHashSegments should handle empty string","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should handle empty string"},{"ancestorTitles":["Message Splitting by #","splitHashSegments"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Message Splitting by # splitHashSegments should handle null/undefined input","invocations":1,"location":null,"numPassingAsserts":2,"retryReasons":[],"status":"passed","title":"should handle null/undefined input"},{"ancestorTitles":["Message Splitting by #","splitHashSegments"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Message Splitting by # splitHashSegments should filter out empty segments","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should filter out empty segments"},{"ancestorTitles":["Message Splitting by #","splitHashSegments"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Message Splitting by # splitHashSegments should handle multiple consecutive #","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should handle multiple consecutive #"},{"ancestorTitles":["Message Splitting by #","splitHashSegments"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Message Splitting by # splitHashSegments should trim whitespace from segments","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should trim whitespace from segments"},{"ancestorTitles":["Message Splitting by #","splitHashSegments"],"duration":1,"failureDetails":[],"failureMessages":[],"fullName":"Message Splitting by # splitHashSegments should handle # at start and end","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should handle # at start and end"},{"ancestorTitles":["Message Splitting by #","splitHashSegments"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Message Splitting by # splitHashSegments should handle numbers and special chars in segments","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should handle numbers and special chars in segments"},{"ancestorTitles":["Message Splitting by #","parseTextSegments"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Message Splitting by # parseTextSegments should split message by # into separate segments","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should split message by # into separate segments"},{"ancestorTitles":["Message Splitting by #","parseTextSegments"],"duration":1,"failureDetails":[],"failureMessages":[],"fullName":"Message Splitting by # parseTextSegments should return single element array for text without #","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should return single element array for text without #"},{"ancestorTitles":["Message Splitting by #","parseTextSegments"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Message Splitting by # parseTextSegments should return empty array for null/undefined","invocations":1,"location":null,"numPassingAsserts":2,"retryReasons":[],"status":"passed","title":"should return empty array for null/undefined"},{"ancestorTitles":["Message Splitting by #","parseTextSegments"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Message Splitting by # parseTextSegments should filter empty segments","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should filter empty segments"},{"ancestorTitles":["Message Splitting by #","parseTextSegments"],"duration":1,"failureDetails":[],"failureMessages":[],"fullName":"Message Splitting by # parseTextSegments should handle only # characters","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should handle only # characters"},{"ancestorTitles":["Typing Indicator Delay Calculation","computeTypingDelayMs"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Typing Indicator Delay Calculation computeTypingDelayMs should calculate minimum delay for short message","invocations":1,"location":null,"numPassingAsserts":2,"retryReasons":[],"status":"passed","title":"should calculate minimum delay for short message"},{"ancestorTitles":["Typing Indicator Delay Calculation","computeTypingDelayMs"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Typing Indicator Delay Calculation computeTypingDelayMs should calculate delay based on character count","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should calculate delay based on character count"},{"ancestorTitles":["Typing Indicator Delay Calculation","computeTypingDelayMs"],"duration":1,"failureDetails":[],"failureMessages":[],"fullName":"Typing Indicator Delay Calculation computeTypingDelayMs should cap at maximum 10 seconds","invocations":1,"location":null,"numPassingAsserts":2,"retryReasons":[],"status":"passed","title":"should cap at maximum 10 seconds"},{"ancestorTitles":["Typing Indicator Delay Calculation","computeTypingDelayMs"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Typing Indicator Delay Calculation computeTypingDelayMs should return 0 for empty string","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should return 0 for empty string"},{"ancestorTitles":["Typing Indicator Delay Calculation","computeTypingDelayMs"],"duration":4,"failureDetails":[],"failureMessages":[],"fullName":"Typing Indicator Delay Calculation computeTypingDelayMs should return 0 for null/undefined","invocations":1,"location":null,"numPassingAsserts":2,"retryReasons":[],"status":"passed","title":"should return 0 for null/undefined"},{"ancestorTitles":["Typing Indicator Delay Calculation","computeTypingDelayMs"],"duration":1,"failureDetails":[],"failureMessages":[],"fullName":"Typing Indicator Delay Calculation computeTypingDelayMs should handle whitespace-only strings","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should handle whitespace-only strings"},{"ancestorTitles":["Typing Indicator Delay Calculation","computeTypingDelayMs"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Typing Indicator Delay Calculation computeTypingDelayMs should add random variation to delay","invocations":1,"location":null,"numPassingAsserts":4,"retryReasons":[],"status":"passed","title":"should add random variation to delay"},{"ancestorTitles":["Typing Indicator Delay Calculation","computeTypingDelayMs"],"duration":1,"failureDetails":[],"failureMessages":[],"fullName":"Typing Indicator Delay Calculation computeTypingDelayMs should calculate delay for medium-length message","invocations":1,"location":null,"numPassingAsserts":2,"retryReasons":[],"status":"passed","title":"should calculate delay for medium-length message"},{"ancestorTitles":["Typing Indicator Delay Calculation","Typing indicator integration with ai/index.js formula"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Typing Indicator Delay Calculation Typing indicator integration with ai/index.js formula should use 30ms per character formula from ai/index.js","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should use 30ms per character formula from ai/index.js"},{"ancestorTitles":["Typing Indicator Delay Calculation","Typing indicator integration with ai/index.js formula"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Typing Indicator Delay Calculation Typing indicator integration with ai/index.js formula should cap at 15000ms in ai/index.js formula","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should cap at 15000ms in ai/index.js formula"},{"ancestorTitles":["Typing Indicator Delay Calculation","Typing indicator integration with ai/index.js formula"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"Typing Indicator Delay Calculation Typing indicator integration with ai/index.js formula should use minimum 1000ms for short messages","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should use minimum 1000ms for short messages"},{"ancestorTitles":["End-to-End: Message Splitting with Typing Simulation"],"duration":1,"failureDetails":[],"failureMessages":[],"fullName":"End-to-End: Message Splitting with Typing Simulation should simulate sending multiple #segmented messages with typing delays","invocations":1,"location":null,"numPassingAsserts":14,"retryReasons":[],"status":"passed","title":"should simulate sending multiple #segmented messages with typing delays"},{"ancestorTitles":["End-to-End: Message Splitting with Typing Simulation"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"End-to-End: Message Splitting with Typing Simulation should handle long message without # splitting","invocations":1,"location":null,"numPassingAsserts":4,"retryReasons":[],"status":"passed","title":"should handle long message without # splitting"},{"ancestorTitles":["End-to-End: Message Splitting with Typing Simulation"],"duration":0,"failureDetails":[],"failureMessages":[],"fullName":"End-to-End: Message Splitting with Typing Simulation should calculate total time for multi-segment message","invocations":1,"location":null,"numPassingAsserts":1,"retryReasons":[],"status":"passed","title":"should calculate total time for multi-segment message"}],"endTime":1772393477071,"message":"","name":"/var/www/html/admin.janeri.com.br/api/envio/wpp/tests/unit/message-splitting-typing.test.js","startTime":1772393477026,"status":"passed","summary":""}],"wasInterrupted":false}

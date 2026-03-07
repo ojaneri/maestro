@@ -152,6 +152,9 @@ function handleMessages($messages, $metadata) {
     $instance = findInstanceByTelephoneId($displayPhoneNumber);
     $accessToken = $instance ? ($instance['meta']['access_token'] ?? null) : null;
     $instanceId = $instance ? $instance['instance_id'] : null;
+    
+    // Add instance_id to metadata for use in saveMessage
+    $metadata['instance_id'] = $instanceId;
 
     foreach ($messages as $message) {
         $from = $message['from'] ?? '';
@@ -185,6 +188,11 @@ function handleMessages($messages, $metadata) {
                 }
 
                 saveMessage($from, $id, $type, $body, $timestamp, $metadata);
+                
+                // Trigger AI processing for text messages within 24h window
+                if ($type === 'text' && !empty($body) && $instance && $instanceId && $within24h) {
+                    processAIResponse($instance, $from, $body, $metadata);
+                }
                 break;
                 
             case 'image':
@@ -294,22 +302,27 @@ function findInstanceByTelephoneId($telephoneId) {
 }
 
 function getLastCustomerMessageTimestamp($fromNumber) {
-    $dbPath = __DIR__ . '/webhook_messages.db';
+    $dbPath = __DIR__ . '/chat_data.db';
     if (!file_exists($dbPath)) {
         return null;
     }
-    $db = new SQLite3($dbPath);
-    $stmt = $db->prepare('SELECT timestamp FROM messages WHERE from_number = :from ORDER BY timestamp DESC LIMIT 1');
-    $stmt->bindValue(':from', $fromNumber, SQLITE3_TEXT);
-    $result = $stmt->execute();
-    $timestamp = null;
-    if ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-        $timestamp = $row['timestamp'];
+    try {
+        $db = new SQLite3($dbPath);
+        $stmt = $db->prepare('SELECT timestamp FROM messages WHERE remote_jid = :from ORDER BY timestamp DESC LIMIT 1');
+        $stmt->bindValue(':from', $fromNumber, SQLITE3_TEXT);
+        $result = $stmt->execute();
+        $timestamp = null;
+        if ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+            $timestamp = $row['timestamp'];
+        }
+        $result->finalize();
+        $stmt->close();
+        $db->close();
+        return $timestamp;
+    } catch (Exception $e) {
+        debug_log('Error getting last customer message timestamp: ' . $e->getMessage());
+        return null;
     }
-    $result->finalize();
-    $stmt->close();
-    $db->close();
-    return $timestamp;
 }
 
 function isWithin24Hours($timestamp) {
@@ -370,158 +383,585 @@ function getApprovedTemplates($instanceId) {
 }
 
 function saveMessage($from, $id, $type, $content, $timestamp, $metadata, $caption = '', $filename = '') {
-    $dbPath = __DIR__ . '/webhook_messages.db';
-    $db = new SQLite3($dbPath);
+    // Connect to main chat database (chat_data.db) instead of separate webhook_messages.db
+    $dbPath = __DIR__ . '/chat_data.db';
+    
+    // Get instance_id from metadata
+    $instanceId = $metadata['instance_id'] ?? '';
+    $phoneNumberId = $metadata['phone_number_id'] ?? '';
+    $displayPhoneNumber = $metadata['display_phone_number'] ?? '';
+    
+    // Format remote_jid as WhatsApp JID (from@s.whatsapp.net)
+    // Meta API sends phone numbers, convert to WhatsApp format
+    $remoteJid = $from;
+    if (strpos($from, '@') === false) {
+        $remoteJid = $from . '@s.whatsapp.net';
+    }
+    
+    // Build metadata JSON with message details
+    $messageMetadata = [
+        'message_type' => $type,
+        'caption' => $caption,
+        'filename' => $filename,
+        'phone_number_id' => $phoneNumberId,
+        'display_phone_number' => $displayPhoneNumber,
+        'meta_message_id' => $id
+    ];
+    $metadataJson = json_encode($messageMetadata);
+    
+    try {
+        $db = new SQLite3($dbPath);
+        
+        // Use INSERT OR REPLACE to handle potential duplicates
+        $stmt = $db->prepare('INSERT INTO messages 
+            (instance_id, remote_jid, session_id, role, content, direction, metadata, wa_message_id, timestamp, created_at)
+            VALUES (:instance_id, :remote_jid, :session_id, :role, :content, :direction, :metadata, :wa_message_id, :timestamp, :created_at)');
 
-    $db->exec('CREATE TABLE IF NOT EXISTS messages (
-        id TEXT PRIMARY KEY,
-        from_number TEXT,
-        type TEXT,
-        content TEXT,
-        caption TEXT,
-        filename TEXT,
-        timestamp TEXT,
-        phone_number_id TEXT,
-        display_phone_number TEXT,
-        created_at TEXT
-    )');
+        $stmt->bindValue(':instance_id', $instanceId, SQLITE3_TEXT);
+        $stmt->bindValue(':remote_jid', $remoteJid, SQLITE3_TEXT);
+        $stmt->bindValue(':session_id', '', SQLITE3_TEXT);
+        $stmt->bindValue(':role', 'user', SQLITE3_TEXT);
+        $stmt->bindValue(':content', $content, SQLITE3_TEXT);
+        $stmt->bindValue(':direction', 'inbound', SQLITE3_TEXT);
+        $stmt->bindValue(':metadata', $metadataJson, SQLITE3_TEXT);
+        $stmt->bindValue(':wa_message_id', $id, SQLITE3_TEXT);
+        $stmt->bindValue(':timestamp', $timestamp, SQLITE3_TEXT);
+        $stmt->bindValue(':created_at', date('Y-m-d H:i:s'), SQLITE3_TEXT);
 
-    $stmt = $db->prepare('INSERT OR REPLACE INTO messages
-        (id, from_number, type, content, caption, filename, timestamp, phone_number_id, display_phone_number, created_at)
-        VALUES (:id, :from_number, :type, :content, :caption, :filename, :timestamp, :phone_number_id, :display_phone_number, :created_at)');
-
-    $stmt->bindValue(':id', $id, SQLITE3_TEXT);
-    $stmt->bindValue(':from_number', $from, SQLITE3_TEXT);
-    $stmt->bindValue(':type', $type, SQLITE3_TEXT);
-    $stmt->bindValue(':content', $content, SQLITE3_TEXT);
-    $stmt->bindValue(':caption', $caption, SQLITE3_TEXT);
-    $stmt->bindValue(':filename', $filename, SQLITE3_TEXT);
-    $stmt->bindValue(':timestamp', $timestamp, SQLITE3_TEXT);
-    $stmt->bindValue(':phone_number_id', $metadata['phone_number_id'] ?? '', SQLITE3_TEXT);
-    $stmt->bindValue(':display_phone_number', $metadata['display_phone_number'] ?? '', SQLITE3_TEXT);
-    $stmt->bindValue(':created_at', date('Y-m-d H:i:s'), SQLITE3_TEXT);
-
-    $stmt->execute();
-    $db->close();
+        $result = $stmt->execute();
+        if (!$result) {
+            debug_log('Error saving message: ' . $db->lastErrorMsg());
+        } else {
+            debug_log('Message saved successfully to chat_data.db');
+        }
+        
+        $result->finalize();
+        $stmt->close();
+        $db->close();
+        
+    } catch (Exception $e) {
+        debug_log('Exception saving message: ' . $e->getMessage());
+    }
 }
 
 function saveDeliveryStatus($messageId, $recipientId, $timestamp, $metadata) {
-    $dbPath = __DIR__ . '/webhook_messages.db';
-    $db = new SQLite3($dbPath);
+    // Log delivery status to main database for tracking
+    $dbPath = __DIR__ . '/chat_data.db';
+    $instanceId = $metadata['instance_id'] ?? '';
     
-    $db->exec('CREATE TABLE IF NOT EXISTS delivery_status (
-        message_id TEXT PRIMARY KEY,
-        recipient_id TEXT,
-        timestamp TEXT,
-        phone_number_id TEXT,
-        display_phone_number TEXT,
-        created_at TEXT
-    )');
-    
-    $stmt = $db->prepare('INSERT OR REPLACE INTO delivery_status 
-        (message_id, recipient_id, timestamp, phone_number_id, display_phone_number, created_at) 
-        VALUES (:message_id, :recipient_id, :timestamp, :phone_number_id, :display_phone_number, :created_at)');
-    
-    $stmt->bindValue(':message_id', $messageId, SQLITE3_TEXT);
-    $stmt->bindValue(':recipient_id', $recipientId, SQLITE3_TEXT);
-    $stmt->bindValue(':timestamp', $timestamp, SQLITE3_TEXT);
-    $stmt->bindValue(':phone_number_id', $metadata['phone_number_id'] ?? '', SQLITE3_TEXT);
-    $stmt->bindValue(':display_phone_number', $metadata['display_phone_number'] ?? '', SQLITE3_TEXT);
-    $stmt->bindValue(':created_at', date('Y-m-d H:i:s'), SQLITE3_TEXT);
-    
-    $stmt->execute();
-    $db->close();
+    try {
+        $db = new SQLite3($dbPath);
+        
+        // Create meta_webhook_events table if not exists
+        $db->exec('CREATE TABLE IF NOT EXISTS meta_webhook_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            instance_id TEXT NOT NULL,
+            phone_number_id TEXT,
+            event_type TEXT NOT NULL,
+            event_data TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            processed INTEGER NOT NULL DEFAULT 0
+        )');
+        
+        $stmt = $db->prepare('INSERT INTO meta_webhook_events 
+            (instance_id, phone_number_id, event_type, event_data, timestamp, processed)
+            VALUES (:instance_id, :phone_number_id, :event_type, :event_data, :timestamp, 1)');
+        
+        $eventData = json_encode([
+            'message_id' => $messageId,
+            'recipient_id' => $recipientId,
+            'status' => 'delivered'
+        ]);
+        
+        $stmt->bindValue(':instance_id', $instanceId, SQLITE3_TEXT);
+        $stmt->bindValue(':phone_number_id', $metadata['phone_number_id'] ?? '', SQLITE3_TEXT);
+        $stmt->bindValue(':event_type', 'message_delivery', SQLITE3_TEXT);
+        $stmt->bindValue(':event_data', $eventData, SQLITE3_TEXT);
+        $stmt->bindValue(':timestamp', $timestamp, SQLITE3_TEXT);
+        
+        $stmt->execute();
+        debug_log('Delivery status logged to chat_data.db');
+        
+        $stmt->close();
+        $db->close();
+        
+    } catch (Exception $e) {
+        debug_log('Error saving delivery status: ' . $e->getMessage());
+    }
 }
 
 function saveReadStatus($messageId, $timestamp, $watermark, $metadata) {
-    $dbPath = __DIR__ . '/webhook_messages.db';
-    $db = new SQLite3($dbPath);
+    // Log read status to main database for tracking
+    $dbPath = __DIR__ . '/chat_data.db';
+    $instanceId = $metadata['instance_id'] ?? '';
     
-    $db->exec('CREATE TABLE IF NOT EXISTS read_status (
-        message_id TEXT PRIMARY KEY,
-        timestamp TEXT,
-        watermark TEXT,
-        phone_number_id TEXT,
-        display_phone_number TEXT,
-        created_at TEXT
-    )');
-    
-    $stmt = $db->prepare('INSERT OR REPLACE INTO read_status 
-        (message_id, timestamp, watermark, phone_number_id, display_phone_number, created_at) 
-        VALUES (:message_id, :timestamp, :watermark, :phone_number_id, :display_phone_number, :created_at)');
-    
-    $stmt->bindValue(':message_id', $messageId, SQLITE3_TEXT);
-    $stmt->bindValue(':timestamp', $timestamp, SQLITE3_TEXT);
-    $stmt->bindValue(':watermark', $watermark, SQLITE3_TEXT);
-    $stmt->bindValue(':phone_number_id', $metadata['phone_number_id'] ?? '', SQLITE3_TEXT);
-    $stmt->bindValue(':display_phone_number', $metadata['display_phone_number'] ?? '', SQLITE3_TEXT);
-    $stmt->bindValue(':created_at', date('Y-m-d H:i:s'), SQLITE3_TEXT);
-    
-    $stmt->execute();
-    $db->close();
+    try {
+        $db = new SQLite3($dbPath);
+        
+        $db->exec('CREATE TABLE IF NOT EXISTS meta_webhook_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            instance_id TEXT NOT NULL,
+            phone_number_id TEXT,
+            event_type TEXT NOT NULL,
+            event_data TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            processed INTEGER NOT NULL DEFAULT 0
+        )');
+        
+        $stmt = $db->prepare('INSERT INTO meta_webhook_events 
+            (instance_id, phone_number_id, event_type, event_data, timestamp, processed)
+            VALUES (:instance_id, :phone_number_id, :event_type, :event_data, :timestamp, 1)');
+        
+        $eventData = json_encode([
+            'message_id' => $messageId,
+            'watermark' => $watermark
+        ]);
+        
+        $stmt->bindValue(':instance_id', $instanceId, SQLITE3_TEXT);
+        $stmt->bindValue(':phone_number_id', $metadata['phone_number_id'] ?? '', SQLITE3_TEXT);
+        $stmt->bindValue(':event_type', 'message_read', SQLITE3_TEXT);
+        $stmt->bindValue(':event_data', $eventData, SQLITE3_TEXT);
+        $stmt->bindValue(':timestamp', $timestamp, SQLITE3_TEXT);
+        
+        $stmt->execute();
+        debug_log('Read status logged to chat_data.db');
+        
+        $stmt->close();
+        $db->close();
+        
+    } catch (Exception $e) {
+        debug_log('Error saving read status: ' . $e->getMessage());
+    }
 }
 
 function saveReaction($messageId, $emoji, $from, $timestamp, $metadata) {
-    $dbPath = __DIR__ . '/webhook_messages.db';
-    $db = new SQLite3($dbPath);
-
-    $db->exec('CREATE TABLE IF NOT EXISTS reactions (
-        id TEXT PRIMARY KEY,
-        message_id TEXT,
-        emoji TEXT,
-        from_number TEXT,
-        timestamp TEXT,
-        phone_number_id TEXT,
-        display_phone_number TEXT,
-        created_at TEXT
-    )');
-
-    $id = uniqid('reaction_', true);
-
-    $stmt = $db->prepare('INSERT INTO reactions
-        (id, message_id, emoji, from_number, timestamp, phone_number_id, display_phone_number, created_at)
-        VALUES (:id, :message_id, :emoji, :from_number, :timestamp, :phone_number_id, :display_phone_number, :created_at)');
-
-    $stmt->bindValue(':id', $id, SQLITE3_TEXT);
-    $stmt->bindValue(':message_id', $messageId, SQLITE3_TEXT);
-    $stmt->bindValue(':emoji', $emoji, SQLITE3_TEXT);
-    $stmt->bindValue(':from_number', $from, SQLITE3_TEXT);
-    $stmt->bindValue(':timestamp', $timestamp, SQLITE3_TEXT);
-    $stmt->bindValue(':phone_number_id', $metadata['phone_number_id'] ?? '', SQLITE3_TEXT);
-    $stmt->bindValue(':display_phone_number', $metadata['display_phone_number'] ?? '', SQLITE3_TEXT);
-    $stmt->bindValue(':created_at', date('Y-m-d H:i:s'), SQLITE3_TEXT);
-
-    $stmt->execute();
-    $db->close();
+    // Log reaction to main database for tracking
+    $dbPath = __DIR__ . '/chat_data.db';
+    $instanceId = $metadata['instance_id'] ?? '';
+    
+    try {
+        $db = new SQLite3($dbPath);
+        
+        $db->exec('CREATE TABLE IF NOT EXISTS meta_webhook_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            instance_id TEXT NOT NULL,
+            phone_number_id TEXT,
+            event_type TEXT NOT NULL,
+            event_data TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            processed INTEGER NOT NULL DEFAULT 0
+        )');
+        
+        $stmt = $db->prepare('INSERT INTO meta_webhook_events 
+            (instance_id, phone_number_id, event_type, event_data, timestamp, processed)
+            VALUES (:instance_id, :phone_number_id, :event_type, :event_data, :timestamp, 1)');
+        
+        $eventData = json_encode([
+            'message_id' => $messageId,
+            'emoji' => $emoji,
+            'from' => $from
+        ]);
+        
+        $stmt->bindValue(':instance_id', $instanceId, SQLITE3_TEXT);
+        $stmt->bindValue(':phone_number_id', $metadata['phone_number_id'] ?? '', SQLITE3_TEXT);
+        $stmt->bindValue(':event_type', 'message_reaction', SQLITE3_TEXT);
+        $stmt->bindValue(':event_data', $eventData, SQLITE3_TEXT);
+        $stmt->bindValue(':timestamp', $timestamp, SQLITE3_TEXT);
+        
+        $stmt->execute();
+        debug_log('Reaction logged to chat_data.db');
+        
+        $stmt->close();
+        $db->close();
+        
+    } catch (Exception $e) {
+        debug_log('Error saving reaction: ' . $e->getMessage());
+    }
 }
 
 function saveStatus($messageId, $status, $timestamp, $recipientId, $metadata) {
-    $dbPath = __DIR__ . '/webhook_messages.db';
-    $db = new SQLite3($dbPath);
+    // Log status to main database for tracking
+    $dbPath = __DIR__ . '/chat_data.db';
+    $instanceId = $metadata['instance_id'] ?? '';
+    
+    try {
+        $db = new SQLite3($dbPath);
+        
+        $db->exec('CREATE TABLE IF NOT EXISTS meta_webhook_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            instance_id TEXT NOT NULL,
+            phone_number_id TEXT,
+            event_type TEXT NOT NULL,
+            event_data TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            processed INTEGER NOT NULL DEFAULT 0
+        )');
+        
+        $stmt = $db->prepare('INSERT INTO meta_webhook_events 
+            (instance_id, phone_number_id, event_type, event_data, timestamp, processed)
+            VALUES (:instance_id, :phone_number_id, :event_type, :event_data, :timestamp, 1)');
+        
+        $eventData = json_encode([
+            'message_id' => $messageId,
+            'status' => $status,
+            'recipient_id' => $recipientId
+        ]);
+        
+        $stmt->bindValue(':instance_id', $instanceId, SQLITE3_TEXT);
+        $stmt->bindValue(':phone_number_id', $metadata['phone_number_id'] ?? '', SQLITE3_TEXT);
+        $stmt->bindValue(':event_type', 'message_status', SQLITE3_TEXT);
+        $stmt->bindValue(':event_data', $eventData, SQLITE3_TEXT);
+        $stmt->bindValue(':timestamp', $timestamp, SQLITE3_TEXT);
+        
+        $stmt->execute();
+        debug_log('Status logged to chat_data.db');
+        
+        $stmt->close();
+        $db->close();
+        
+    } catch (Exception $e) {
+        debug_log('Error saving status: ' . $e->getMessage());
+    }
+}
 
-    $db->exec('CREATE TABLE IF NOT EXISTS message_statuses (
-        message_id TEXT,
-        status TEXT,
-        timestamp TEXT,
-        recipient_id TEXT,
-        phone_number_id TEXT,
-        display_phone_number TEXT,
-        created_at TEXT,
-        PRIMARY KEY (message_id, status)
-    )');
+/**
+ * Get AI configuration from database for an instance
+ * @param string $instanceId - Instance ID
+ * @return array|null - AI config or null if not found/disabled
+ */
+function getAIConfig($instanceId) {
+    require_once __DIR__ . '/config/database.php';
+    
+    try {
+        $dbPath = __DIR__ . '/chat_data.db';
+        $db = new SQLite3($dbPath);
+        
+        // Query AI settings from the settings table
+        $keys = ['ai_enabled', 'ai_provider', 'ai_model', 'ai_system_prompt', 'ai_assistant_prompt', 
+                 'gemini_api_key', 'gemini_instruction', 'openai_api_key', 'openai_mode',
+                 'ai_history_limit', 'ai_temperature', 'ai_max_tokens'];
+        
+        $placeholders = implode(',', array_fill(0, count($keys), '?'));
+        $stmt = $db->prepare("SELECT key, value FROM settings WHERE instance_id = ? AND key IN ($placeholders)");
+        $params = array_merge([$instanceId], $keys);
+        
+        foreach ($params as $i => $param) {
+            $stmt->bindValue($i + 1, $param);
+        }
+        
+        $result = $stmt->execute();
+        $config = [];
+        while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+            $config[$row['key']] = $row['value'];
+        }
+        $stmt->close();
+        $db->close();
+        
+        if (empty($config)) {
+            debug_log('No AI config found for instance: ' . $instanceId);
+            return null;
+        }
+        
+        // Check if AI is enabled
+        $enabled = $config['ai_enabled'] ?? '0';
+        if ($enabled !== 'true' && $enabled !== '1') {
+            debug_log('AI is disabled for instance: ' . $instanceId);
+            return null;
+        }
+        
+        // Map to expected format for the rest of the code
+        return [
+            'enabled' => $enabled,
+            'provider' => $config['ai_provider'] ?? 'gemini',
+            'model' => $config['ai_model'] ?? 'gemini-2.0-flash',
+            'system_prompt' => $config['ai_system_prompt'] ?? '',
+            'assistant_prompt' => $config['ai_assistant_prompt'] ?? '',
+            'gemini_api_key' => $config['gemini_api_key'] ?? '',
+            'gemini_instruction' => $config['gemini_instruction'] ?? '',
+            'openai_api_key' => $config['openai_api_key'] ?? '',
+            'openai_mode' => $config['openai_mode'] ?? 'responses',
+            'history_limit' => intval($config['ai_history_limit'] ?? 20),
+            'temperature' => floatval($config['ai_temperature'] ?? 0.6),
+            'max_tokens' => intval($config['ai_max_tokens'] ?? 2000)
+        ];
+    } catch (Exception $e) {
+        debug_log('Error getting AI config: ' . $e->getMessage());
+        return null;
+    }
+}
 
-    $stmt = $db->prepare('INSERT OR REPLACE INTO message_statuses
-        (message_id, status, timestamp, recipient_id, phone_number_id, display_phone_number, created_at)
-        VALUES (:message_id, :status, :timestamp, :recipient_id, :phone_number_id, :display_phone_number, :created_at)');
+/**
+ * Get conversation history from database for context
+ * @param string $instanceId - Instance ID
+ * @param string $remoteJid - Remote JID (phone number)
+ * @param int $limit - Number of messages to fetch
+ * @return array - Array of message objects with role and content
+ */
+function getConversationHistory($instanceId, $remoteJid, $limit = 10) {
+    $dbPath = __DIR__ . '/chat_data.db';
+    $history = [];
+    
+    try {
+        $db = new SQLite3($dbPath);
+        $stmt = $db->prepare('
+            SELECT role, content, direction 
+            FROM messages 
+            WHERE instance_id = :instance_id 
+            AND remote_jid LIKE :remote_jid
+            ORDER BY timestamp DESC 
+            LIMIT :limit'
+        );
+        $stmt->bindValue(':instance_id', $instanceId, SQLITE3_TEXT);
+        $stmt->bindValue(':remote_jid', '%' . $remoteJid . '%', SQLITE3_TEXT);
+        $stmt->bindValue(':limit', $limit, SQLITE3_INTEGER);
+        
+        $result = $stmt->execute();
+        
+        while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
+            // Convert direction to role
+            $role = ($row['direction'] === 'inbound' || $row['role'] === 'user') ? 'user' : 'model';
+            $history[] = [
+                'role' => $role,
+                'content' => $row['content']
+            ];
+        }
+        
+        $result->finalize();
+        $stmt->close();
+        $db->close();
+        
+        // Reverse to get chronological order
+        return array_reverse($history);
+    } catch (Exception $e) {
+        debug_log('Error getting conversation history: ' . $e->getMessage());
+        return [];
+    }
+}
 
-    $stmt->bindValue(':message_id', $messageId, SQLITE3_TEXT);
-    $stmt->bindValue(':status', $status, SQLITE3_TEXT);
-    $stmt->bindValue(':timestamp', $timestamp, SQLITE3_TEXT);
-    $stmt->bindValue(':recipient_id', $recipientId, SQLITE3_TEXT);
-    $stmt->bindValue(':phone_number_id', $metadata['phone_number_id'] ?? '', SQLITE3_TEXT);
-    $stmt->bindValue(':display_phone_number', $metadata['display_phone_number'] ?? '', SQLITE3_TEXT);
-    $stmt->bindValue(':created_at', date('Y-m-d H:i:s'), SQLITE3_TEXT);
+/**
+ * Process incoming message with AI and send response
+ * @param array $instance - Instance data
+ * @param string $from - Sender phone number
+ * @param string $messageBody - Message text
+ * @param array $metadata - Message metadata
+ */
+function processAIResponse($instance, $from, $messageBody, $metadata) {
+    $instanceId = $instance['instance_id'] ?? null;
+    if (!$instanceId) {
+        debug_log('No instance_id for AI processing');
+        return;
+    }
+    
+    debug_log('Starting AI processing for instance: ' . $instanceId);
+    
+    // Get AI configuration
+    $aiConfig = getAIConfig($instanceId);
+    if (!$aiConfig) {
+        debug_log('AI not configured or disabled for this instance');
+        return;
+    }
+    
+    $provider = $aiConfig['provider'] ?? 'gemini';
+    debug_log('AI Provider: ' . $provider);
+    
+    // Route to appropriate provider
+    if ($provider === 'gemini') {
+        processGeminiResponse($instance, $from, $messageBody, $aiConfig);
+    } else {
+        debug_log('Unsupported AI provider: ' . $provider);
+    }
+}
 
-    $stmt->execute();
-    $db->close();
+/**
+ * Process message with Gemini API
+ * @param array $instance - Instance data
+ * @param string $from - Sender phone number
+ * @param string $messageBody - Message text
+ * @param array $aiConfig - AI configuration
+ */
+function processGeminiResponse($instance, $from, $messageBody, $aiConfig) {
+    $instanceId = $instance['instance_id'];
+    $phoneNumberId = $instance['meta']['telephone_id'] ?? '';
+    $accessToken = $instance['meta']['access_token'] ?? '';
+    
+    $geminiApiKey = $aiConfig['gemini_api_key'] ?? '';
+    if (empty($geminiApiKey)) {
+        debug_log('Gemini API key not configured');
+        return;
+    }
+    
+    // Format remote JID for history query
+    $remoteJid = $from;
+    if (strpos($from, '@') === false) {
+        $remoteJid = $from . '@s.whatsapp.net';
+    }
+    
+    // Get conversation history
+    $historyLimit = isset($aiConfig['history_limit']) ? intval($aiConfig['history_limit']) : 10;
+    $history = getConversationHistory($instanceId, $remoteJid, $historyLimit);
+    debug_log('Retrieved ' . count($history) . ' history messages');
+    
+    // Build system instruction
+    $systemPrompt = $aiConfig['system_prompt'] ?? '';
+    $geminiInstruction = $aiConfig['gemini_instruction'] ?? '';
+    $systemInstruction = $systemPrompt;
+    if (!empty($geminiInstruction)) {
+        $systemInstruction .= "\n\n" . $geminiInstruction;
+    }
+    
+    if (empty($systemInstruction)) {
+        $systemInstruction = "Você é um assistente virtual do sistema Maestro.\nSua função é ajudar os usuários com suas dúvidas e solicitações.\nResponda de forma clara, objetiva e profissional em português brasileiro.";
+    }
+    
+    // Build messages for Gemini API
+    $messages = [];
+    
+    // Add system instruction
+    $messages[] = [
+        'role' => 'user',
+        'parts' => [['text' => $systemInstruction]]
+    ];
+    
+    // Add history
+    foreach ($history as $msg) {
+        $messages[] = [
+            'role' => ($msg['role'] === 'user') ? 'user' : 'model',
+            'parts' => [['text' => $msg['content']]]
+        ];
+    }
+    
+    // Add current message
+    $messages[] = [
+        'role' => 'user',
+        'parts' => [['text' => $messageBody]]
+    ];
+    
+    // Prepare API request
+    $model = $aiConfig['model'] ?? 'gemini-1.5-flash';
+    $temperature = floatval($aiConfig['temperature'] ?? 0.7);
+    $maxTokens = intval($aiConfig['max_tokens'] ?? 600);
+    
+    $url = "https://generativelanguage.googleapis.com/v1beta/models/{$model}:generateContent?key={$geminiApiKey}";
+    
+    $payload = [
+        'contents' => $messages,
+        'generationConfig' => [
+            'temperature' => $temperature,
+            'maxOutputTokens' => $maxTokens
+        ]
+    ];
+    
+    debug_log('Calling Gemini API with model: ' . $model);
+    
+    // Make API call
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json'
+    ]);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+    curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+    
+    $response = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
+    curl_close($ch);
+    
+    if ($curlError) {
+        debug_log('Gemini API cURL error: ' . $curlError);
+        return;
+    }
+    
+    if ($httpCode !== 200) {
+        debug_log('Gemini API error. HTTP: ' . $httpCode . ', Response: ' . substr($response, 0, 500));
+        return;
+    }
+    
+    $responseData = json_decode($response, true);
+    
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        debug_log('Failed to parse Gemini response: ' . json_last_error_msg());
+        return;
+    }
+    
+    // Extract response text
+    $candidates = $responseData['candidates'] ?? [];
+    if (empty($candidates)) {
+        debug_log('Gemini response has no candidates');
+        return;
+    }
+    
+    $aiText = $candidates[0]['content']['parts'][0]['text'] ?? '';
+    
+    if (empty($aiText)) {
+        debug_log('Gemini returned empty response');
+        return;
+    }
+    
+    debug_log('AI Response: ' . substr($aiText, 0, 100) . '...');
+    
+    // Send response via Meta API
+    if (!empty($accessToken) && !empty($phoneNumberId)) {
+        $sent = sendTextMessage($phoneNumberId, $accessToken, $from, $aiText);
+        if ($sent) {
+            debug_log('AI response sent successfully');
+            
+            // Save AI response to database
+            $responseId = 'ai_' . time() . '_' . rand(1000, 9999);
+            $responseMetadata = [
+                'message_type' => 'text',
+                'ai_provider' => 'gemini',
+                'ai_model' => $model,
+                'ai_status' => 'success'
+            ];
+            saveAIResponseMessage($instanceId, $remoteJid, $responseId, $aiText, $responseMetadata);
+        } else {
+            debug_log('Failed to send AI response');
+        }
+    } else {
+        debug_log('Missing access_token or phone_number_id for sending AI response');
+    }
+}
+
+/**
+ * Save AI response message to database
+ * @param string $instanceId - Instance ID
+ * @param string $remoteJid - Remote JID
+ * @param string $messageId - Message ID
+ * @param string $content - Message content
+ * @param array $metadata - Additional metadata
+ */
+function saveAIResponseMessage($instanceId, $remoteJid, $messageId, $content, $metadata = []) {
+    $dbPath = __DIR__ . '/chat_data.db';
+    
+    try {
+        $db = new SQLite3($dbPath);
+        
+        $stmt = $db->prepare('INSERT INTO messages 
+            (instance_id, remote_jid, session_id, role, content, direction, metadata, wa_message_id, timestamp, created_at)
+            VALUES (:instance_id, :remote_jid, :session_id, :role, :content, :direction, :metadata, :wa_message_id, :timestamp, :created_at)');
+
+        $stmt->bindValue(':instance_id', $instanceId, SQLITE3_TEXT);
+        $stmt->bindValue(':remote_jid', $remoteJid, SQLITE3_TEXT);
+        $stmt->bindValue(':session_id', '', SQLITE3_TEXT);
+        $stmt->bindValue(':role', 'assistant', SQLITE3_TEXT);
+        $stmt->bindValue(':content', $content, SQLITE3_TEXT);
+        $stmt->bindValue(':direction', 'outbound', SQLITE3_TEXT);
+        $stmt->bindValue(':metadata', json_encode($metadata), SQLITE3_TEXT);
+        $stmt->bindValue(':wa_message_id', $messageId, SQLITE3_TEXT);
+        $stmt->bindValue(':timestamp', date('Y-m-d H:i:s'), SQLITE3_TEXT);
+        $stmt->bindValue(':created_at', date('Y-m-d H:i:s'), SQLITE3_TEXT);
+
+        $result = $stmt->execute();
+        
+        $result->finalize();
+        $stmt->close();
+        $db->close();
+        
+        debug_log('AI response saved to database');
+        
+    } catch (Exception $e) {
+        debug_log('Error saving AI response: ' . $e->getMessage());
+    }
 }
