@@ -1070,6 +1070,65 @@ async function executeTool(functionName, args, dependencies = {}) {
                 }
             }
             
+            case 'agendar3': {
+                const schedulingHandler = require('../../commands/handlers/scheduling');
+                const instanceId = dependencies.instanceId || 'default';
+                const remoteJid = dependencies.remoteJid || null;
+                try {
+                    const { datetime, texto, tag, tipo, interno } = args;
+                    const result = await schedulingHandler.agendar3.call(
+                        { instanceId, db, remoteJid },
+                        datetime,
+                        texto,
+                        tag || 'default',
+                        tipo || 'followup',
+                        interno || false
+                    );
+                    return { success: true, result };
+                } catch (err) {
+                    console.error('[Gemini] Error in agendar3:', err);
+                    return { success: false, error: err.message };
+                }
+            }
+            
+            case 'cancelar_e_agendar3': {
+                const schedulingHandler = require('../../commands/handlers/scheduling');
+                const instanceId = dependencies.instanceId || 'default';
+                const remoteJid = dependencies.remoteJid || null;
+                try {
+                    const { datetime, texto, tag, tipo, interno } = args;
+                    const result = await schedulingHandler.cancelar_e_agendar3.call(
+                        { instanceId, db, remoteJid },
+                        datetime,
+                        texto,
+                        tag || 'default',
+                        tipo || 'followup',
+                        interno || false
+                    );
+                    return { success: true, result };
+                } catch (err) {
+                    console.error('[Gemini] Error in cancelar_e_agendar3:', err);
+                    return { success: false, error: err.message };
+                }
+            }
+            
+            case 'apagar_agendas_por_tipo': {
+                const schedulingHandler = require('../../commands/handlers/scheduling');
+                const instanceId = dependencies.instanceId || 'default';
+                try {
+                    const { tipo, interno } = args;
+                    const result = await schedulingHandler.apagar_agendas_por_tipo.call(
+                        { instanceId, db },
+                        tipo,
+                        interno || false
+                    );
+                    return { success: true, result };
+                } catch (err) {
+                    console.error('[Gemini] Error in apagar_agendas_por_tipo:', err);
+                    return { success: false, error: err.message };
+                }
+            }
+            
             case 'listar_agendamentos': {
                 const schedulingHandler = require('../../commands/handlers/scheduling');
                 const instanceId = dependencies.instanceId || 'default';

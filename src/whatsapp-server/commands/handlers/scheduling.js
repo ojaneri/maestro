@@ -351,13 +351,243 @@ async function sugerirHorarios(args, context = {}) {
     }
 }
 
+/**
+ * Schedule a message for exact datetime (agendar3)
+ * Uses exact datetime provided (YYYY-MM-DD HH:mm:ss), ignores time until now
+ * @param {string} exactTime - Exact datetime in YYYY-MM-DD HH:mm:ss format
+ * @param {string} text - Message text
+ * @param {string} tag - Tag for the schedule
+ * @param {string} tipo - Type of schedule
+ * @param {boolean} interno - If true, only log internally without user notification
+ * @returns {Promise<Object>}
+ */
+async function agendar3(exactTime, text, tag = 'default', tipo = 'followup', interno = false) {
+    const { instanceId, db, remoteJid } = this || {};
+    const currentInstanceId = instanceId || global.INSTANCE_ID || 'default';
+    const recipient = remoteJid || null;
+
+    if (!exactTime || !text) {
+        return {
+            ok: false,
+            message: 'Parâmetros obrigatórios: exactTime e text'
+        };
+    }
+
+    try {
+        // Parse exactTime (YYYY-MM-DD HH:mm:ss)
+        const scheduledDate = new Date(exactTime.replace(' ', 'T'));
+        if (isNaN(scheduledDate.getTime())) {
+            return {
+                ok: false,
+                message: 'Formato de data inválido. Use YYYY-MM-DD HH:mm:ss'
+            };
+        }
+
+        // Use the exact time provided (ignores if in the past - lets scheduler handle it)
+        const scheduledFor = scheduledDate.toISOString().replace('T', ' ').substring(0, 19);
+
+        console.log(`[agendar3] Scheduling for exact time: ${scheduledFor}, interno: ${interno}`);
+
+        const scheduledMessage = await schedulerService.scheduleMessage({
+            recipient: recipient,
+            message: text,
+            scheduledFor: scheduledFor,
+            tag: tag || 'default',
+            tipo: tipo || 'followup',
+            instanceId: currentInstanceId
+        });
+
+        const responseData = {
+            scheduledId: scheduledMessage.scheduledId,
+            scheduledTime: scheduledMessage.scheduledAt || scheduledFor
+        };
+
+        // If interno=true, don't show to user, just return internal response
+        if (interno) {
+            console.log(`[agendar3] Internal schedule created: ${scheduledMessage.scheduledId}`);
+            return {
+                ok: true,
+                message: 'Agendamento interno criado',
+                data: responseData
+            };
+        }
+
+        return {
+            ok: true,
+            message: `Mensagem agendada para ${scheduledFor}`,
+            data: responseData
+        };
+    } catch (error) {
+        console.error('[agendar3] Error scheduling message:', error);
+        return {
+            ok: false,
+            message: `Erro ao agendar: ${error.message}`
+        };
+    }
+}
+
+/**
+ * Cancel existing schedules by tag and schedule new message (cancelar_e_agendar3)
+ * @param {string} exactTime - Exact datetime in YYYY-MM-DD HH:mm:ss format
+ * @param {string} text - Message text
+ * @param {string} tag - Tag to cancel and schedule
+ * @param {string} tipo - Type of schedule
+ * @param {boolean} interno - If true, only log internally without user notification
+ * @returns {Promise<Object>}
+ */
+async function cancelar_e_agendar3(exactTime, text, tag = 'default', tipo = 'followup', interno = false) {
+    const { instanceId, db, remoteJid } = this || {};
+    const currentInstanceId = instanceId || global.INSTANCE_ID || 'default';
+    const recipient = remoteJid || null;
+
+    if (!exactTime || !text || !tag) {
+        return {
+            ok: false,
+            message: 'Parâmetros obrigatórios: exactTime, text e tag'
+        };
+    }
+
+    try {
+        // First cancel all pending messages with the given tag
+        let cancelledCount = 0;
+        if (db && typeof db.deleteScheduledMessagesByTag === 'function') {
+            const cancelResult = await db.deleteScheduledMessagesByTag(currentInstanceId, recipient, tag);
+            cancelledCount = cancelResult?.deleted || 0;
+            console.log(`[cancelar_e_agendar3] Cancelled ${cancelledCount} schedules with tag: ${tag}`);
+        }
+
+        // Parse exactTime (YYYY-MM-DD HH:mm:ss)
+        const scheduledDate = new Date(exactTime.replace(' ', 'T'));
+        if (isNaN(scheduledDate.getTime())) {
+            return {
+                ok: false,
+                message: 'Formato de data inválido. Use YYYY-MM-DD HH:mm:ss'
+            };
+        }
+
+        const scheduledFor = scheduledDate.toISOString().replace('T', ' ').substring(0, 19);
+
+        console.log(`[cancelar_e_agendar3] Scheduling for exact time: ${scheduledFor}, tag: ${tag}, interno: ${interno}`);
+
+        // Schedule new message
+        const scheduledMessage = await schedulerService.scheduleMessage({
+            recipient: recipient,
+            message: text,
+            scheduledFor: scheduledFor,
+            tag: tag,
+            tipo: tipo || 'followup',
+            instanceId: currentInstanceId
+        });
+
+        const responseData = {
+            cancelledCount: cancelledCount,
+            scheduledId: scheduledMessage.scheduledId,
+            scheduledTime: scheduledMessage.scheduledAt || scheduledFor
+        };
+
+        // If interno=true, don't show to user
+        if (interno) {
+            console.log(`[cancelar_e_agendar3] Internal reschedule created: ${scheduledMessage.scheduledId}`);
+            return {
+                ok: true,
+                message: 'Reagendamento interno realizado',
+                data: responseData
+            };
+        }
+
+        return {
+            ok: true,
+            message: `Cancelados ${cancelledCount} agendamento(s) e criado novo para ${scheduledFor}`,
+            data: responseData
+        };
+    } catch (error) {
+        console.error('[cancelar_e_agendar3] Error:', error);
+        return {
+            ok: false,
+            message: `Erro ao reagendar: ${error.message}`
+        };
+    }
+}
+
+/**
+ * Delete all scheduled messages by type (apagar_agendas_por_tipo)
+ * @param {string} tipo - Type of schedules to delete
+ * @param {boolean} interno - If true, only log internally without user notification
+ * @returns {Promise<Object>}
+ */
+async function apagar_agendas_por_tipo(tipo, interno = false) {
+    const { instanceId, db } = this || {};
+    const currentInstanceId = instanceId || global.INSTANCE_ID || 'default';
+
+    if (!tipo) {
+        return {
+            ok: false,
+            message: 'Parâmetro obrigatório: tipo'
+        };
+    }
+
+    try {
+        let deletedCount = 0;
+        
+        if (db && typeof db.deleteScheduledMessagesByTipo === 'function') {
+            const result = await db.deleteScheduledMessagesByTipo(currentInstanceId, null, tipo);
+            deletedCount = result?.deleted || 0;
+            console.log(`[apagar_agendas_por_tipo] Deleted ${deletedCount} schedules of tipo: ${tipo}`);
+        } else {
+            // Fallback: use schedulerService if db method not available
+            const scheduledMessages = await schedulerService.listScheduledMessages({
+                tipo: tipo
+            });
+            
+            for (const msg of scheduledMessages) {
+                try {
+                    await schedulerService.cancelScheduledMessage(msg.id);
+                    deletedCount++;
+                } catch (e) {
+                    console.warn(`[apagar_agendas_por_tipo] Failed to delete ${msg.id}:`, e.message);
+                }
+            }
+        }
+
+        const responseData = {
+            deletedCount: deletedCount,
+            tipo: tipo
+        };
+
+        // If interno=true, don't show to user
+        if (interno) {
+            console.log(`[apagar_agendas_por_tipo] Internal deletion of tipo ${tipo}: ${deletedCount}`);
+            return {
+                ok: true,
+                message: 'Exclusão interna realizada',
+                data: responseData
+            };
+        }
+
+        return {
+            ok: true,
+            message: `Excluído(s) ${deletedCount} agendamento(s) do tipo "${tipo}"`,
+            data: responseData
+        };
+    } catch (error) {
+        console.error('[apagar_agendas_por_tipo] Error:', error);
+        return {
+            ok: false,
+            message: `Erro ao excluir agendamentos: ${error.message}`
+        };
+    }
+}
+
 module.exports = {
     agendar,
     agendar2,
+    agendar3,
     cancelar,
+    cancelar_e_agendar3,
     listarAgendamentos,
     apagarAgenda,
     apagarAgendasPorTag,
+    apagar_agendas_por_tipo,
     cancelarEAgendar2,
     verificarDisponibilidade,
     sugerirHorarios,
