@@ -184,6 +184,41 @@ async function handleSingleMessage(message, socket) {
         return;
     }
     
+    // Check for debug2# - Customer Data Functions
+    if (text && text.trim().toLowerCase() === '#debug2#') {
+        console.log('[DEBUG2] Customer Data Functions test from', remoteJid);
+        await handleDebug2Command(message, socket);
+        return;
+    }
+    
+    // Check for debug3# - Calendar Functions
+    if (text && text.trim().toLowerCase() === '#debug3#') {
+        console.log('[DEBUG3] Calendar Functions test from', remoteJid);
+        await handleDebug3Command(message, socket);
+        return;
+    }
+    
+    // Check for debug4# - Scheduling Functions
+    if (text && text.trim().toLowerCase() === '#debug4#') {
+        console.log('[DEBUG4] Scheduling Functions test from', remoteJid);
+        await handleDebug4Command(message, socket);
+        return;
+    }
+    
+    // Check for debug5# - Context/State Functions
+    if (text && text.trim().toLowerCase() === '#debug5#') {
+        console.log('[DEBUG5] Context/State Functions test from', remoteJid);
+        await handleDebug5Command(message, socket);
+        return;
+    }
+    
+    // Check for debug6# - Messaging Functions
+    if (text && text.trim().toLowerCase() === '#debug6#') {
+        console.log('[DEBUG6] Messaging Functions test from', remoteJid);
+        await handleDebug6Command(message, socket);
+        return;
+    }
+    
     // Route to AI processing
     await processMessageWithAI(message, socket);
 }
@@ -264,6 +299,420 @@ function formatUptime(seconds) {
     const minutes = Math.floor((seconds % 3600) / 60);
     const secs = Math.floor(seconds % 60);
     return `${hours}h ${minutes}m ${secs}s`;
+}
+
+/**
+ * Handle debug2# - Test Customer Data Functions
+ * @param {Object} msg - Message object
+ * @param {Object} socket - WhatsApp socket instance
+ */
+async function handleDebug2Command(msg, socket) {
+    const remoteJid = msg.key.remoteJid;
+    const instanceId = global.INSTANCE_ID || 'default';
+    
+    try {
+        const db = require('../../../../db-updated');
+        const dadosHandler = require('../../commands/handlers/dados');
+        
+        let results = "🧪 DEBUG2 - Customer Data Functions\n\n";
+        
+        // Test 1: dados()
+        results += "📋 1. dados('teste@exemplo.com')\n";
+        try {
+            const dadosResult = await dadosHandler.getCustomerData.call({ instanceId, db, remoteJid }, 'teste@exemplo.com');
+            results += `   ✅ Result: ${JSON.stringify(dadosResult).substring(0, 200)}\n\n`;
+        } catch (e) {
+            results += `   ❌ Error: ${e.message}\n\n`;
+        }
+        
+        // Test 2: optout()
+        results += "📋 2. optout()\n";
+        try {
+            const optoutResult = await dadosHandler.optOut.call({ instanceId, db, remoteJid });
+            results += `   ✅ Result: ${JSON.stringify(optoutResult).substring(0, 200)}\n\n`;
+        } catch (e) {
+            results += `   ❌ Error: ${e.message}\n\n`;
+        }
+        
+        // Test 3: status_followup()
+        results += "📋 3. status_followup()\n";
+        try {
+            const statusResult = await dadosHandler.statusFollowup.call({ instanceId, db, remoteJid });
+            results += `   ✅ Result: ${JSON.stringify(statusResult).substring(0, 300)}\n\n`;
+        } catch (e) {
+            results += `   ❌ Error: ${e.message}\n\n`;
+        }
+        
+        // Test 4: tempo_sem_interacao()
+        results += "📋 4. tempo_sem_interacao()\n";
+        try {
+            const tempoResult = await dadosHandler.tempoSemInteracao.call({ instanceId, db, remoteJid });
+            results += `   ✅ Result: ${JSON.stringify(tempoResult).substring(0, 200)}\n\n`;
+        } catch (e) {
+            results += `   ❌ Error: ${e.message}\n\n`;
+        }
+        
+        // Test 5: log_evento()
+        results += "📋 5. log_evento('teste','Debug test', '{}')\n";
+        try {
+            const logResult = await dadosHandler.logEvent.call({ instanceId, db, remoteJid }, 'teste', 'Debug test', '{}');
+            results += `   ✅ Result: ${JSON.stringify(logResult).substring(0, 200)}\n\n`;
+        } catch (e) {
+            results += `   ❌ Error: ${e.message}\n\n`;
+        }
+        
+        results += "✅ Debug2 test completed";
+        
+        if (socket && socket.sendMessage) {
+            await socket.sendMessage(remoteJid, { text: results });
+            console.log('[DEBUG2] Results sent to', remoteJid);
+        }
+        
+    } catch (error) {
+        console.error('[DEBUG2] Error:', error);
+        if (socket && socket.sendMessage) {
+            await socket.sendMessage(remoteJid, { text: `❌ Erro: ${error.message}` });
+        }
+    }
+}
+
+/**
+ * Handle debug3# - Test Calendar Functions
+ * @param {Object} msg - Message object
+ * @param {Object} socket - WhatsApp socket instance
+ */
+async function handleDebug3Command(msg, socket) {
+    const remoteJid = msg.key.remoteJid;
+    const instanceId = global.INSTANCE_ID || 'default';
+    
+    try {
+        const db = require('../../../../db-updated');
+        const calendarHandler = require('../../calendar');
+        
+        let results = "🧪 DEBUG3 - Calendar Functions\n\n";
+        
+        // Test 1: verificar_disponibilidade()
+        results += "📋 1. verificar_disponibilidade('2026-03-10T09:00','2026-03-10T10:00', 1, 'America/Fortaleza')\n";
+        try {
+            const dispResult = await calendarHandler.checkAvailability.call(
+                { instanceId, db, remoteJid },
+                '2026-03-10T09:00',
+                '2026-03-10T10:00',
+                1,
+                'America/Fortaleza'
+            );
+            results += `   ✅ Result: ${JSON.stringify(dispResult).substring(0, 300)}\n\n`;
+        } catch (e) {
+            results += `   ❌ Error: ${e.message}\n\n`;
+        }
+        
+        // Test 2: sugerir_horarios()
+        results += "📋 2. sugerir_horarios('2026-03-10', '09:00-18:00', 60, 5, 1, 'America/Fortaleza')\n";
+        try {
+            const sugResult = await calendarHandler.suggestAvailableSlots.call(
+                { instanceId, db, remoteJid },
+                '2026-03-10',
+                '09:00-18:00',
+                60,
+                5,
+                1,
+                'America/Fortaleza'
+            );
+            results += `   ✅ Result: ${JSON.stringify(sugResult).substring(0, 300)}\n\n`;
+        } catch (e) {
+            results += `   ❌ Error: ${e.message}\n\n`;
+        }
+        
+        // Test 3: listar_eventos()
+        results += "📋 3. listar_eventos('2026-03-01', '2026-03-31', 1, 'America/Fortaleza')\n";
+        try {
+            const listResult = await calendarHandler.listEvents.call(
+                { instanceId, db, remoteJid },
+                '2026-03-01',
+                '2026-03-31',
+                1,
+                'America/Fortaleza'
+            );
+            results += `   ✅ Result: ${JSON.stringify(listResult).substring(0, 300)}\n\n`;
+        } catch (e) {
+            results += `   ❌ Error: ${e.message}\n\n`;
+        }
+        
+        results += "✅ Debug3 test completed";
+        
+        if (socket && socket.sendMessage) {
+            await socket.sendMessage(remoteJid, { text: results });
+            console.log('[DEBUG3] Results sent to', remoteJid);
+        }
+        
+    } catch (error) {
+        console.error('[DEBUG3] Error:', error);
+        if (socket && socket.sendMessage) {
+            await socket.sendMessage(remoteJid, { text: `❌ Erro: ${error.message}` });
+        }
+    }
+}
+
+/**
+ * Handle debug4# - Test Scheduling Functions
+ * @param {Object} msg - Message object
+ * @param {Object} socket - WhatsApp socket instance
+ */
+async function handleDebug4Command(msg, socket) {
+    const remoteJid = msg.key.remoteJid;
+    const instanceId = global.INSTANCE_ID || 'default';
+    
+    try {
+        const db = require('../../../../db-updated');
+        const schedulingHandler = require('../../commands/handlers/scheduling');
+        
+        let results = "🧪 DEBUG4 - Scheduling Functions\n\n";
+        
+        // Test 1: agendar2()
+        results += "📋 1. agendar2('+5m', 'Teste de agendamento', 'debug', 'test', false)\n";
+        try {
+            const ag2Result = await schedulingHandler.agendar2.call(
+                { instanceId, db, remoteJid },
+                '+5m',
+                'Teste de agendamento',
+                'debug',
+                'test',
+                false
+            );
+            results += `   ✅ Result: ${JSON.stringify(ag2Result).substring(0, 300)}\n\n`;
+        } catch (e) {
+            results += `   ❌ Error: ${e.message}\n\n`;
+        }
+        
+        // Test 2: agendar3()
+        results += "📋 2. agendar3('2026-03-15 10:00', 'Teste data exata', 'debug', 'test', false)\n";
+        try {
+            const ag3Result = await schedulingHandler.agendar3.call(
+                { instanceId, db, remoteJid },
+                '2026-03-15 10:00',
+                'Teste data exata',
+                'debug',
+                'test',
+                false
+            );
+            results += `   ✅ Result: ${JSON.stringify(ag3Result).substring(0, 300)}\n\n`;
+        } catch (e) {
+            results += `   ❌ Error: ${e.message}\n\n`;
+        }
+        
+        // Test 3: listar_agendamentos()
+        results += "📋 3. listar_agendamentos('debug', 'test', false)\n";
+        try {
+            const listResult = await schedulingHandler.listar_agendamentos.call(
+                { instanceId, db, remoteJid },
+                'debug',
+                'test',
+                false
+            );
+            results += `   ✅ Result: ${JSON.stringify(listResult).substring(0, 300)}\n\n`;
+        } catch (e) {
+            results += `   ❌ Error: ${e.message}\n\n`;
+        }
+        
+        // Test 4: cancelar_e_agendar2()
+        results += "📋 4. cancelar_e_agendar2('+10m', 'Novo agendamento', 'debug', 'test', false)\n";
+        try {
+            const cancelResult = await schedulingHandler.cancelar_e_agendar2.call(
+                { instanceId, db, remoteJid },
+                '+10m',
+                'Novo agendamento',
+                'debug',
+                'test',
+                false
+            );
+            results += `   ✅ Result: ${JSON.stringify(cancelResult).substring(0, 300)}\n\n`;
+        } catch (e) {
+            results += `   ❌ Error: ${e.message}\n\n`;
+        }
+        
+        results += "✅ Debug4 test completed";
+        
+        if (socket && socket.sendMessage) {
+            await socket.sendMessage(remoteJid, { text: results });
+            console.log('[DEBUG4] Results sent to', remoteJid);
+        }
+        
+    } catch (error) {
+        console.error('[DEBUG4] Error:', error);
+        if (socket && socket.sendMessage) {
+            await socket.sendMessage(remoteJid, { text: `❌ Erro: ${error.message}` });
+        }
+    }
+}
+
+/**
+ * Handle debug5# - Test Context/State Functions
+ * @param {Object} msg - Message object
+ * @param {Object} socket - WhatsApp socket instance
+ */
+async function handleDebug5Command(msg, socket) {
+    const remoteJid = msg.key.remoteJid;
+    const instanceId = global.INSTANCE_ID || 'default';
+    
+    try {
+        const db = require('../../../../db-updated');
+        const contextHandler = require('../../commands/handlers/context');
+        
+        let results = "🧪 DEBUG5 - Context/State Functions\n\n";
+        
+        // Test 1: set_estado()
+        results += "📋 1. set_estado('interessado')\n";
+        try {
+            const setEstadoResult = await contextHandler.set_estado.call(
+                { instanceId, db, remoteJid },
+                'interessado'
+            );
+            results += `   ✅ Result: ${JSON.stringify(setEstadoResult).substring(0, 200)}\n\n`;
+        } catch (e) {
+            results += `   ❌ Error: ${e.message}\n\n`;
+        }
+        
+        // Test 2: get_estado()
+        results += "📋 2. get_estado()\n";
+        try {
+            const getEstadoResult = await contextHandler.get_estado.call(
+                { instanceId, db, remoteJid }
+            );
+            results += `   ✅ Result: ${JSON.stringify(getEstadoResult).substring(0, 200)}\n\n`;
+        } catch (e) {
+            results += `   ❌ Error: ${e.message}\n\n`;
+        }
+        
+        // Test 3: set_contexto()
+        results += "📋 3. set_contexto('debug_test', 'valor_teste')\n";
+        try {
+            const setCtxResult = await contextHandler.set_contexto.call(
+                { instanceId, db, remoteJid },
+                'debug_test',
+                'valor_teste'
+            );
+            results += `   ✅ Result: ${JSON.stringify(setCtxResult).substring(0, 200)}\n\n`;
+        } catch (e) {
+            results += `   ❌ Error: ${e.message}\n\n`;
+        }
+        
+        // Test 4: get_contexto()
+        results += "📋 4. get_contexto('debug_test')\n";
+        try {
+            const getCtxResult = await contextHandler.get_contexto.call(
+                { instanceId, db, remoteJid },
+                'debug_test'
+            );
+            results += `   ✅ Result: ${JSON.stringify(getCtxResult).substring(0, 200)}\n\n`;
+        } catch (e) {
+            results += `   ❌ Error: ${e.message}\n\n`;
+        }
+        
+        // Test 5: limpar_contexto()
+        results += "📋 5. limpar_contexto(['debug_test'])\n";
+        try {
+            const cleanCtxResult = await contextHandler.limpar_contexto.call(
+                { instanceId, db, remoteJid },
+                ['debug_test']
+            );
+            results += `   ✅ Result: ${JSON.stringify(cleanCtxResult).substring(0, 200)}\n\n`;
+        } catch (e) {
+            results += `   ❌ Error: ${e.message}\n\n`;
+        }
+        
+        // Test 6: set_variavel()
+        results += "📋 6. set_variavel('test_var', 'test_value')\n";
+        try {
+            const setVarResult = await contextHandler.set_variavel.call(
+                { instanceId, db, remoteJid },
+                'test_var',
+                'test_value'
+            );
+            results += `   ✅ Result: ${JSON.stringify(setVarResult).substring(0, 200)}\n\n`;
+        } catch (e) {
+            results += `   ❌ Error: ${e.message}\n\n`;
+        }
+        
+        // Test 7: get_variavel()
+        results += "📋 7. get_variavel('test_var')\n";
+        try {
+            const getVarResult = await contextHandler.get_variavel.call(
+                { instanceId, db, remoteJid },
+                'test_var'
+            );
+            results += `   ✅ Result: ${JSON.stringify(getVarResult).substring(0, 200)}\n\n`;
+        } catch (e) {
+            results += `   ❌ Error: ${e.message}\n\n`;
+        }
+        
+        results += "✅ Debug5 test completed";
+        
+        if (socket && socket.sendMessage) {
+            await socket.sendMessage(remoteJid, { text: results });
+            console.log('[DEBUG5] Results sent to', remoteJid);
+        }
+        
+    } catch (error) {
+        console.error('[DEBUG5] Error:', error);
+        if (socket && socket.sendMessage) {
+            await socket.sendMessage(remoteJid, { text: `❌ Erro: ${error.message}` });
+        }
+    }
+}
+
+/**
+ * Handle debug6# - Test Messaging Functions
+ * @param {Object} msg - Message object
+ * @param {Object} socket - WhatsApp socket instance
+ */
+async function handleDebug6Command(msg, socket) {
+    const remoteJid = msg.key.remoteJid;
+    const instanceId = global.INSTANCE_ID || 'default';
+    
+    try {
+        const db = require('../../../../db-updated');
+        const whatsappHandler = require('../../commands/handlers/whatsapp');
+        
+        let results = "🧪 DEBUG6 - Messaging Functions\n\n";
+        
+        // Note: We don't actually send messages to avoid spam
+        // Instead we just check if the functions are accessible
+        
+        results += "📋 Functions available for testing:\n";
+        results += "   - whatsapp(numero, mensagem)\n";
+        results += "   - boomerang(mensagem)\n";
+        results += "   - mail(destino, assunto, corpo, remetente?)\n";
+        results += "   - template(id, var1?, var2?, var3?)\n";
+        results += "   - IMG:uploads/...|legenda\n";
+        results += "   - VIDEO:uploads/...|legenda\n";
+        results += "   - AUDIO:uploads/...\n";
+        results += "   - CONTACT:Nome|Note\n\n";
+        
+        // Test boomerang (doesn't send to anyone)
+        results += "📋 1. boomerang('Teste interno')\n";
+        try {
+            const boomResult = await whatsappHandler.boomerang.call(
+                { instanceId, db, remoteJid, socket },
+                'Teste interno'
+            );
+            results += `   ✅ Result: ${JSON.stringify(boomResult).substring(0, 200)}\n\n`;
+        } catch (e) {
+            results += `   ❌ Error: ${e.message}\n\n`;
+        }
+        
+        results += "✅ Debug6 test completed (messaging functions require parameters)";
+        
+        if (socket && socket.sendMessage) {
+            await socket.sendMessage(remoteJid, { text: results });
+            console.log('[DEBUG6] Results sent to', remoteJid);
+        }
+        
+    } catch (error) {
+        console.error('[DEBUG6] Error:', error);
+        if (socket && socket.sendMessage) {
+            await socket.sendMessage(remoteJid, { text: `❌ Erro: ${error.message}` });
+        }
+    }
 }
 
 /**
@@ -732,5 +1181,12 @@ module.exports = {
     detectMediaPayload,
     detectContactPayload,
     downloadMediaMessage,
-    applyMultiInputDelay
+    applyMultiInputDelay,
+    // Debug commands
+    handleDebugCommand,
+    handleDebug2Command,
+    handleDebug3Command,
+    handleDebug4Command,
+    handleDebug5Command,
+    handleDebug6Command
 };
